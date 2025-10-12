@@ -1,18 +1,18 @@
 import express from "express";
 import bodyParser from "body-parser";
+import cors from "cors";
 import axios from "axios";
 import { google } from "googleapis";
 
 const app = express();
+app.use(cors());
 app.use(bodyParser.json());
 
-// Variáveis de ambiente
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n");
 
-// Função para autenticar no Google Sheets
 async function getSheets() {
   const auth = new google.auth.JWT(
     GOOGLE_CLIENT_EMAIL,
@@ -27,45 +27,65 @@ async function getSheets() {
 // Rota de teste
 app.get("/", (_, res) => res.send("✅ Webhook ativo!"));
 
-// Rota do webhook Mercado Pago
-app.post("/webhook", async (req, res) => {
+// Criar preferência de pagamento
+app.post("/create_preference", async (req, res) => {
   try {
-    // Responde imediatamente ao MP
-    res.status(200).send("OK");
+    const { nome, telefone, servico, precoTotal, data, hora } = req.body;
+    if (!nome || !telefone || !servico || !precoTotal || !data || !hora) {
+      return res.status(400).json({ error: "Campos obrigatórios faltando" });
+    }
 
-    const paymentId = req.body?.data?.id || req.query?.id;
-    if (!paymentId) return;
+    const preference = {
+      items: [
+        { title: servico, quantity: 1, unit_price: parseFloat(precoTotal) }
+      ],
+      external_reference: JSON.stringify({ nome, telefone, servico, preco: precoTotal, data, hora }),
+      back_urls: { success: "https://seu-site.netlify.app", failure: "https://seu-site.netlify.app" },
+      auto_return: "approved"
+    };
 
-    // Pega dados do pagamento
-    const { data } = await axios.get(
-      `https://api.mercadopago.com/v1/payments/${paymentId}`,
+    const { data } = await axios.post(
+      "https://api.mercadopago.com/checkout/preferences",
+      preference,
       { headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` } }
     );
 
-    if (data.status === "approved") {
-      // Tenta ler external_reference sem quebrar o código
+    res.json({ init_point: data.init_point });
+  } catch (err) {
+    console.error("Erro ao criar preferência:", err.response?.data || err.message);
+    res.status(500).json({ error: "Erro ao criar preferência" });
+  }
+});
+
+// Webhook do Mercado Pago
+app.post("/webhook", async (req, res) => {
+  try {
+    const paymentId = req.body?.data?.id || req.query?.id;
+    if (!paymentId) return res.status(200).send("OK");
+
+    let paymentData;
+    try {
+      const response = await axios.get(
+        `https://api.mercadopago.com/v1/payments/${paymentId}`,
+        { headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` } }
+      );
+      paymentData = response.data;
+    } catch (err) {
+      if (err.response?.status === 404) {
+        console.log("⚠️ Pagamento não encontrado (sandbox ou teste)");
+        return res.status(200).send("OK");
+      } else {
+        throw err;
+      }
+    }
+
+    if (paymentData.status === "approved") {
       let ref = {};
-      try {
-        ref = JSON.parse(data.external_reference || "{}");
-      } catch (err) {
-        console.log("External reference inválido:", data.external_reference);
-      }
-
+      try { ref = JSON.parse(paymentData.external_reference || "{}"); } catch {}
       const sheets = await getSheets();
-
-      // Tenta pegar a aba pelo nome, se não funcionar, pega a primeira
-      let sheet;
-      try {
-        sheet = sheets.spreadsheets.values;
-      } catch {
-        console.log("Falha ao acessar a planilha pelo nome, tentando índice");
-        sheet = sheets.spreadsheets.values;
-      }
-
-      // Adiciona linha na planilha
       await sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
-        range: "Agendamentos!A2",
+        range: "Agendamentos!A2:Z",
         valueInputOption: "RAW",
         requestBody: {
           values: [[
@@ -75,21 +95,22 @@ app.post("/webhook", async (req, res) => {
             ref.preco || "",
             ref.data || "",
             ref.hora || "",
-            data.status,
-            data.id,
+            paymentData.status,
+            paymentData.id,
             new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })
           ]]
         }
       });
 
-      console.log("📊 Dados adicionados à planilha!");
+      console.log(`✅ Pagamento aprovado e registrado: ${paymentData.id}`);
     }
 
+    res.status(200).send("OK");
   } catch (e) {
-    console.error("Erro no webhook:", e);
+    console.error("Erro no webhook:", e.message);
+    res.status(500).send("Erro interno");
   }
 });
 
-// Inicia o servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Webhook rodando na porta ${PORT}`));
