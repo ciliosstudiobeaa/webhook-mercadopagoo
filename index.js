@@ -1,88 +1,76 @@
+// index.js
 import express from "express";
 import fetch from "node-fetch";
+import bodyParser from "body-parser";
+import cors from "cors";
 
 const app = express();
-app.use(express.json());
+app.use(cors());
+app.use(bodyParser.json());
 
-// CONFIGURAÇÃO
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxKtox0VU2EMvKzZdRLCVAr-zSMuGK-8THdqlE9vh3oj4BqQfmgNlNFYV99HGMItN07/exec";
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+const PORT = process.env.PORT || 3000;
 
-// CRIAR PREFERÊNCIA (CHECKOUT)
-app.post("/create-preference", async (req, res) => {
+// Endpoint para criar preferência
+app.post("/create-preference", async (req,res)=>{
+  const { nome, telefone, servico, precoTotal, dataSessao, horarioSessao } = req.body;
+
   try {
-    const { nome, telefone, servico, precoTotal, data, hora } = req.body;
-    console.log("Criando preferência:", req.body);
-
-    const resp = await fetch("https://api.mercadopago.com/checkout/preferences", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${ACCESS_TOKEN}`
+    // Chamar Mercado Pago API para criar preference
+    const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences",{
+      method:"POST",
+      headers:{
+        "Authorization": `Bearer ${process.env.MP_ACCESS_TOKEN}`,
+        "Content-Type":"application/json"
       },
       body: JSON.stringify({
-        items: [{ title: servico, quantity: 1, unit_price: parseFloat(precoTotal) }],
-        metadata: { nome, telefone, servico, data, hora },
-        back_urls: { success: "https://seusite.com/success", failure: "https://seusite.com/failure" },
-        auto_return: "approved"
+        items:[{ title: servico, quantity:1, unit_price: precoTotal }],
+        metadata:{ nome, telefone, dataSessao, horarioSessao },
+        back_urls:{ success:"https://seusite.com/sucesso" }
       })
     });
 
-    const preference = await resp.json();
-    res.json({ init_point: preference.init_point });
-  } catch (err) {
-    console.error("Erro ao criar preferência:", err);
-    res.status(500).json({ error: "Erro ao criar preferência" });
+    const data = await mpRes.json();
+    res.json({ init_point: data.init_point });
+  } catch(err){
+    console.error(err);
+    res.json({ error: err.message });
   }
 });
 
-// WEBHOOK MERCADO PAGO
-app.post("/webhook", async (req, res) => {
-  try {
-    const body = req.body;
-    console.log("Webhook recebido:", JSON.stringify(body, null, 2));
+// Webhook para receber notificação de pagamento
+app.post("/webhook", async (req,res)=>{
+  console.log("Webhook recebido:", req.body);
 
-    if (body.action !== "payment.updated") return res.sendStatus(200);
+  if(req.body.action==="payment.updated" && req.body.data?.id){
+    const paymentId = req.body.data.id;
 
-    const paymentId = body.data?.id;
-    if (!paymentId) return res.sendStatus(400);
+    // Consultar pagamento no Mercado Pago
+    try {
+      const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`,{
+        headers:{ "Authorization": `Bearer ${process.env.MP_ACCESS_TOKEN}` }
+      });
+      const payment = await mpRes.json();
 
-    const resp = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-      headers: { Authorization: `Bearer ${ACCESS_TOKEN}` }
-    });
-
-    const pagamento = await resp.json();
-
-    if (pagamento.status !== "approved") return res.sendStatus(200);
-
-    const { nome, telefone, servico, data, hora } = pagamento.metadata || {};
-    if (!nome || !telefone || !servico || !data || !hora) return res.sendStatus(200);
-
-    const sheetResp = await fetch(GOOGLE_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        paymentId: pagamento.id,
-        nome,
-        diaagendado: data,
-        horaagendada: hora,
-        servico,
-        valor: pagamento.transaction_amount,
-        status: "Aprovado",
-        whatsapp: telefone
-      })
-    });
-
-    const sheetResult = await sheetResp.text();
-    console.log("Resposta da planilha:", sheetResult);
-
-    res.sendStatus(200);
-
-  } catch (err) {
-    console.error("Erro no webhook:", err);
-    res.sendStatus(500);
+      if(payment.status==="approved"){
+        // Enviar dados para Google Sheets
+        await fetch("https://script.google.com/macros/s/AKfycbxKtox0VU2EMvKzZdRLCVAr-zSMuGK-8THdqlE9vh3oj4BqQfmgNlNFYV99HGMItN07/exec",{
+          method:"POST",
+          headers:{ "Content-Type":"application/json" },
+          body: JSON.stringify({
+            nome: payment.metadata.nome,
+            telefone: payment.metadata.telefone,
+            servico: payment.metadata.servico,
+            precoTotal: payment.transaction_amount,
+            dataSessao: payment.metadata.dataSessao,
+            horarioSessao: payment.metadata.horarioSessao,
+            status: "Aprovado"
+          })
+        });
+      }
+    } catch(err){ console.error(err); }
   }
+
+  res.status(200).send("OK");
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Webhook ativo na porta ${PORT}`));
+app.listen(PORT, ()=>console.log(`Servidor rodando na porta ${PORT}`));
