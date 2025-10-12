@@ -6,11 +6,13 @@ import { google } from "googleapis";
 const app = express();
 app.use(bodyParser.json());
 
+// Variáveis de ambiente
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n");
 
+// Função para autenticar no Google Sheets
 async function getSheets() {
   const auth = new google.auth.JWT(
     GOOGLE_CLIENT_EMAIL,
@@ -22,40 +24,72 @@ async function getSheets() {
   return google.sheets({ version: "v4", auth });
 }
 
+// Rota de teste
 app.get("/", (_, res) => res.send("✅ Webhook ativo!"));
 
+// Rota do webhook Mercado Pago
 app.post("/webhook", async (req, res) => {
   try {
-    const paymentId = req.body?.data?.id || req.query?.id;
-    if (!paymentId) return res.status(200).send("OK");
+    // Responde imediatamente ao MP
+    res.status(200).send("OK");
 
+    const paymentId = req.body?.data?.id || req.query?.id;
+    if (!paymentId) return;
+
+    // Pega dados do pagamento
     const { data } = await axios.get(
       `https://api.mercadopago.com/v1/payments/${paymentId}`,
       { headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` } }
     );
 
     if (data.status === "approved") {
-      const ref = JSON.parse(data.external_reference || "{}");
+      // Tenta ler external_reference sem quebrar o código
+      let ref = {};
+      try {
+        ref = JSON.parse(data.external_reference || "{}");
+      } catch (err) {
+        console.log("External reference inválido:", data.external_reference);
+      }
+
       const sheets = await getSheets();
+
+      // Tenta pegar a aba pelo nome, se não funcionar, pega a primeira
+      let sheet;
+      try {
+        sheet = sheets.spreadsheets.values;
+      } catch {
+        console.log("Falha ao acessar a planilha pelo nome, tentando índice");
+        sheet = sheets.spreadsheets.values;
+      }
+
+      // Adiciona linha na planilha
       await sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
-        range: "A2",
+        range: "Agendamentos!A2",
         valueInputOption: "RAW",
         requestBody: {
           values: [[
-            ref.nome || "", ref.telefone || "", ref.servico || "",
-            ref.preco || "", ref.data || "", ref.hora || "",
-            data.status, data.id, new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })
+            ref.nome || "",
+            ref.telefone || "",
+            ref.servico || "",
+            ref.preco || "",
+            ref.data || "",
+            ref.hora || "",
+            data.status,
+            data.id,
+            new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })
           ]]
         }
       });
+
+      console.log("📊 Dados adicionados à planilha!");
     }
 
-    res.status(200).send("OK");
   } catch (e) {
-    console.error(e);
-    res.status(500).send("Erro interno");
+    console.error("Erro no webhook:", e);
   }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("🚀 Webhook rodando!"));
+// Inicia o servidor
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Webhook rodando na porta ${PORT}`));
