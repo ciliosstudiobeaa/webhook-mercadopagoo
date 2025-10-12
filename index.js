@@ -9,12 +9,12 @@ app.use(express.json());
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
-if(!MP_ACCESS_TOKEN || !GOOGLE_SCRIPT_URL){
+if (!MP_ACCESS_TOKEN || !GOOGLE_SCRIPT_URL) {
   console.error("⚠️ Variáveis de ambiente MP_ACCESS_TOKEN ou GOOGLE_SCRIPT_URL não definidas!");
   process.exit(1);
 }
 
-// Criar link de pagamento Mercado Pago
+// Criar link de pagamento
 app.post('/create-preference', async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
@@ -46,8 +46,22 @@ app.post('/create-preference', async (req, res) => {
 // Webhook Mercado Pago
 app.post('/webhook', async (req, res) => {
   try {
-    const payment = req.body;
-    console.log("Webhook recebido:", JSON.stringify(payment));
+    const webhook = req.body;
+    console.log("Webhook recebido:", JSON.stringify(webhook));
+
+    // Pega o payment_id
+    const payment_id = webhook.data?.id;
+    if (!payment_id) {
+      console.log("Webhook sem payment_id. Ignorando.");
+      return res.status(200).send('OK');
+    }
+
+    // Busca os detalhes completos do pagamento
+    const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${payment_id}`, {
+      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` }
+    });
+    const payment = await paymentRes.json();
+    console.log("Detalhes do pagamento:", payment);
 
     if (payment.status === 'approved') {
       console.log("Pagamento aprovado! Enviando para Google Script...");
@@ -70,16 +84,15 @@ app.post('/webhook', async (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(agendamento)
         });
-
         const gsJson = await gsRes.json();
         console.log("Resposta do Google Script:", gsJson);
 
-      } catch(errGS){
+      } catch(errGS) {
         console.error("Erro ao enviar para Google Script:", errGS);
       }
 
     } else {
-      console.log("Pagamento não aprovado, status:", payment.status);
+      console.log("Pagamento não aprovado ainda, status:", payment.status);
     }
 
     res.status(200).send('OK');
@@ -92,3 +105,4 @@ app.post('/webhook', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+           
