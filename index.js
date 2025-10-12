@@ -3,11 +3,16 @@ import fetch from 'node-fetch';
 import cors from 'cors';
 
 const app = express();
-app.use(cors()); // Permite front-end em qualquer domínio
+app.use(cors()); // Permite front-end de qualquer domínio
 app.use(express.json());
 
-const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN; // Token Mercado Pago
-const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL; // URL do seu Google Script
+const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
+const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
+
+if(!MP_ACCESS_TOKEN || !GOOGLE_SCRIPT_URL){
+  console.error("⚠️ Variáveis de ambiente MP_ACCESS_TOKEN ou GOOGLE_SCRIPT_URL não definidas!");
+  process.exit(1); // Sai imediatamente se faltar variável
+}
 
 // --- Endpoint para criar preferência de pagamento ---
 app.post('/create-preference', async (req, res) => {
@@ -16,11 +21,7 @@ app.post('/create-preference', async (req, res) => {
 
     const preferenceData = {
       items: [
-        {
-          title: `Agendamento - ${servico}`,
-          quantity: 1,
-          unit_price: Number(precoTotal),
-        }
+        { title: `Agendamento - ${servico}`, quantity: 1, unit_price: Number(precoTotal) }
       ],
       back_urls: {
         success: "https://seusite.com/sucesso",
@@ -28,16 +29,13 @@ app.post('/create-preference', async (req, res) => {
         pending: "https://seusite.com/pendente"
       },
       auto_return: "approved",
-      external_reference: `${Date.now()}`, // referência única
+      external_reference: `${Date.now()}`, 
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada }
     };
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
-        "Content-Type": "application/json"
-      },
+      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify(preferenceData)
     });
 
@@ -55,9 +53,7 @@ app.post('/webhook', async (req, res) => {
   try {
     const payment = req.body;
 
-    // Só processa se status for approved
     if (payment.status === 'approved') {
-
       const agendamento = {
         nome: payment.metadata?.nome || '',
         diaagendado: payment.metadata?.diaagendado || '',
@@ -90,4 +86,3 @@ app.post('/webhook', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
-  
