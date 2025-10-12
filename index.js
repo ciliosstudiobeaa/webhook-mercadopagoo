@@ -3,7 +3,7 @@ import fetch from 'node-fetch';
 import cors from 'cors';
 
 const app = express();
-app.use(cors()); // Permite front-end de qualquer domínio
+app.use(cors());
 app.use(express.json());
 
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
@@ -11,25 +11,19 @@ const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
 if(!MP_ACCESS_TOKEN || !GOOGLE_SCRIPT_URL){
   console.error("⚠️ Variáveis de ambiente MP_ACCESS_TOKEN ou GOOGLE_SCRIPT_URL não definidas!");
-  process.exit(1); // Sai imediatamente se faltar variável
+  process.exit(1);
 }
 
-// --- Endpoint para criar preferência de pagamento ---
+// Criar link de pagamento Mercado Pago
 app.post('/create-preference', async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
     const preferenceData = {
-      items: [
-        { title: `Agendamento - ${servico}`, quantity: 1, unit_price: Number(precoTotal) }
-      ],
-      back_urls: {
-        success: "https://seusite.com/sucesso",
-        failure: "https://seusite.com/falha",
-        pending: "https://seusite.com/pendente"
-      },
+      items: [{ title: `Agendamento - ${servico}`, quantity: 1, unit_price: Number(precoTotal) }],
+      back_urls: { success: "https://sucesso.com", failure: "https://falha.com", pending: "https://pendente.com" },
       auto_return: "approved",
-      external_reference: `${Date.now()}`, 
+      external_reference: `${Date.now()}`,
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada }
     };
 
@@ -40,23 +34,27 @@ app.post('/create-preference', async (req, res) => {
     });
 
     const mpJson = await mpRes.json();
+    console.log("Preference criado:", mpJson);
     res.json(mpJson);
 
   } catch (err) {
-    console.error('Erro create-preference:', err);
+    console.error("Erro create-preference:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// --- Endpoint para receber webhook do Mercado Pago ---
+// Webhook Mercado Pago
 app.post('/webhook', async (req, res) => {
   try {
     const payment = req.body;
+    console.log("Webhook recebido:", JSON.stringify(payment));
 
     if (payment.status === 'approved') {
+      console.log("Pagamento aprovado! Enviando para Google Script...");
+
       const agendamento = {
         nome: payment.metadata?.nome || '',
-        diaagendado: payment.metadata?.diaagendado || '',
+        diaagendado: payment.metadata?.diaagendada || '',
         horaagendada: payment.metadata?.horaagendada || '',
         servico: payment.metadata?.servico || '',
         valor30: payment.transaction_amount ? `R$ ${(payment.transaction_amount*0.3).toFixed(2)}` : '',
@@ -66,20 +64,28 @@ app.post('/webhook', async (req, res) => {
         reference: payment.external_reference || ''
       };
 
-      // Envia para Google Script
-      await fetch(GOOGLE_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(agendamento)
-      });
+      try {
+        const gsRes = await fetch(GOOGLE_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(agendamento)
+        });
 
-      console.log('Agendamento enviado para Google Script:', agendamento);
+        const gsJson = await gsRes.json();
+        console.log("Resposta do Google Script:", gsJson);
+
+      } catch(errGS){
+        console.error("Erro ao enviar para Google Script:", errGS);
+      }
+
+    } else {
+      console.log("Pagamento não aprovado, status:", payment.status);
     }
 
     res.status(200).send('OK');
 
   } catch (err) {
-    console.error('Erro webhook:', err);
+    console.error("Erro no webhook:", err);
     res.status(500).send('Erro interno');
   }
 });
