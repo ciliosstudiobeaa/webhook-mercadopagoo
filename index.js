@@ -4,7 +4,7 @@ import fetch from "node-fetch";
 const app = express();
 app.use(express.json());
 
-// ✅ Webhook Mercado Pago
+// Webhook Mercado Pago
 app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
@@ -13,7 +13,7 @@ app.post("/webhook", async (req, res) => {
     if (body.action === "payment.created" || body.action === "payment.updated") {
       const paymentId = body.data.id;
 
-      // 🔎 Consulta o pagamento no Mercado Pago
+      // Consulta pagamento no Mercado Pago
       const resp = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
         headers: { Authorization: `Bearer ${process.env.ACCESS_TOKEN}` },
       });
@@ -22,7 +22,7 @@ app.post("/webhook", async (req, res) => {
       if (pagamento.status === "approved") {
         const metadata = pagamento.metadata || {};
 
-        // Envia os dados para a planilha Google Sheets
+        // Envia para a planilha Google Sheets
         await fetch("https://script.google.com/macros/s/AKfycbxKtox0VU2EMvKzZdRLCVAr-zSMuGK-8THdqlE9vh3oj4BqQfmgNlNFYV99HGMItN07/exec", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -46,6 +46,6 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// 🔧 Porta dinâmica do Render
+// Porta dinâmica do Render
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Webhook ativo na porta ${PORT}`));
