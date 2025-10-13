@@ -111,7 +111,7 @@ app.post("/gerar-pagamento", async (req, res) => {
     const preference = {
       items: [{ title: servico, quantity: 1, unit_price: parseFloat(precoTotal) }],
       payer: { name: nome },
-      metadata: { nome, whatsapp, servico, diaagendada, horaagendada },
+      metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
         success: "https://httpbin.org/status/200",
         failure: "https://httpbin.org/status/400",
