@@ -98,11 +98,11 @@ app.post("/gerar-pagamento", async (req, res) => {
       items: [{ title: servico, quantity: 1, unit_price: parseFloat(precoTotal) }],
       payer: { name: nome },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
-      back_urls: {
-        success: "https://example.com/success",
-        failure: "https://example.com/failure",
-        pending: "https://example.com/pending"
-      },
+      back_urls": {
+  success: "https://httpbin.org/status/200",
+  failure: "https://httpbin.org/status/400",
+  pending: "https://httpbin.org/status/202"
+      }
       auto_return: "approved",
       external_reference: `${nome}-${Date.now()}`,
     };
