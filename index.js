@@ -14,7 +14,7 @@ if (!MP_ACCESS_TOKEN || !GOOGLE_SCRIPT_URL) {
   process.exit(1);
 }
 
-// Criar link de pagamento
+// Rota para criar link de pagamento
 app.post('/create-preference', async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
@@ -43,26 +43,27 @@ app.post('/create-preference', async (req, res) => {
   }
 });
 
-// Webhook Mercado Pago
+// Rota para receber webhook Mercado Pago
 app.post('/webhook', async (req, res) => {
   try {
     const webhook = req.body;
     console.log("Webhook recebido:", JSON.stringify(webhook));
 
-    // Pega o payment_id
+    // Pega o payment_id corretamente
     const payment_id = webhook.data?.id;
     if (!payment_id) {
-      console.log("Webhook sem payment_id. Ignorando.");
+      console.log("Payment ID não encontrado no webhook.");
       return res.status(200).send('OK');
     }
 
-    // Busca os detalhes completos do pagamento
+    // Busca pagamento completo
     const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${payment_id}`, {
       headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` }
     });
     const payment = await paymentRes.json();
     console.log("Detalhes do pagamento:", payment);
 
+    // Verifica se pagamento aprovado
     if (payment.status === 'approved') {
       console.log("Pagamento aprovado! Enviando para Google Script...");
 
@@ -84,6 +85,7 @@ app.post('/webhook', async (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(agendamento)
         });
+        console.log("Status do Google Script:", gsRes.status);
         const gsJson = await gsRes.json();
         console.log("Resposta do Google Script:", gsJson);
 
@@ -105,4 +107,3 @@ app.post('/webhook', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
-           
