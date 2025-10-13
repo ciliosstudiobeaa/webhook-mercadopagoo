@@ -11,7 +11,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL; // ex: https://script.google.com/macros/s/xxx/exec
-const WHATSAPP_BEA = process.env.WHATSAPP_BEA || ""; // ex: 5519
+const WHATSAPP_BEA = process.env.WHATSAPP_BEA || ""; // ex: 5519996293227
 
 if (!MP_ACCESS_TOKEN) console.warn("⚠️ MP_ACCESS_TOKEN não definido em env.");
 if (!GOOGLE_SCRIPT_URL) console.warn("⚠️ GOOGLE_SCRIPT_URL não definido em env.");
@@ -30,13 +30,9 @@ let agendamentos = []; // { data: "YYYY-MM-DD", horario: "HH:MM", servico, nome 
 // --- Helpers ---
 function isoToBR(isoDate) {
   if (!isoDate) return "";
-  // aceita YYYY-MM-DD ou Date string
   try {
     const d = new Date(isoDate);
-    if (!isNaN(d)) {
-      return d.toLocaleDateString("pt-BR");
-    }
-    // fallback split
+    if (!isNaN(d)) return d.toLocaleDateString("pt-BR");
     const [y, m, day] = isoDate.split("-");
     if (day) return `${day}/${m}/${y}`;
     return isoDate;
@@ -50,12 +46,11 @@ function buildWhatsAppLink({ nome, servico, diaBr, hora, extra = "" }) {
     nome
   )}%0A📅 Data: ${encodeURIComponent(diaBr)}%0A⏰ Horário: ${encodeURIComponent(
     hora
-  )}%0A💆 Serviço: ${encodeURIComponent(servico)}%0A${extra}`; // already encoded pieces
+  )}%0A💆 Serviço: ${encodeURIComponent(servico)}%0A${extra}`;
   return `https://wa.me/${WHATSAPP_BEA}?text=${mensagem}`;
 }
 
 async function postToGoogleScript(payload, tries = 2) {
-  // tenta postar e retorna json (ou throw)
   for (let attempt = 1; attempt <= tries; attempt++) {
     try {
       const res = await fetch(GOOGLE_SCRIPT_URL, {
@@ -78,7 +73,7 @@ async function postToGoogleScript(payload, tries = 2) {
 // Health
 app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
 
-// Horários disponíveis (query param "data" = "YYYY-MM-DD")
+// Horários disponíveis
 app.get("/horarios-disponiveis", (req, res) => {
   try {
     const data = req.query.data;
@@ -106,11 +101,16 @@ app.post("/gerar-pagamento", async (req, res) => {
       return res.status(400).json({ ok: false, msg: "Campos obrigatórios ausentes" });
     }
 
-    // Monta preference
     const preference = {
       items: [{ title: servico, quantity: 1, unit_price: parseFloat(precoTotal) }],
       payer: { name: nome },
-      metadata: { nome, whatsapp, servico, diaagendada, horaagendada },
+      metadata: {
+        nome,
+        whatsapp,
+        servico,
+        diaagendada: diaagendado, // mapeia corretamente
+        horaagendada
+      },
       back_urls: { success: "#", failure: "#", pending: "#" },
       auto_return: "approved",
       external_reference: `${nome}-${Date.now()}`,
@@ -127,9 +127,6 @@ app.post("/gerar-pagamento", async (req, res) => {
 
     const mpJson = await mpRes.json();
 
-    console.log("Preferência criada:", mpJson.id || mpJson);
-
-    // link de whatsapp prefill (opcional): cliente já pode falar com Bea antes do pagamento se quiser
     const diaBr = isoToBR(diaagendado);
     const whatsapp_prefill = WHATSAPP_BEA
       ? buildWhatsAppLink({ nome, servico, diaBr, hora: horaagendada, extra: "%0A%0A(Enviei pelo site)" })
@@ -142,26 +139,18 @@ app.post("/gerar-pagamento", async (req, res) => {
   }
 });
 
-// Webhook Mercado Pago (configure na conta do MP)
+// Webhook Mercado Pago
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("Webhook recebido:", JSON.stringify(req.body).slice(0, 1000));
     const paymentId = req.body?.data?.id;
-    if (!paymentId) {
-      console.log("paymentId ausente no payload do webhook");
-      return res.status(400).json({ ok: false, msg: "paymentId ausente" });
-    }
+    if (!paymentId) return res.status(400).json({ ok: false, msg: "paymentId ausente" });
 
-    // Consulta pagamento
     const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
     });
-
     const payment = await mpRes.json();
-    console.log("Detalhes do pagamento:", payment.status, payment.status_detail);
 
     if (payment.status === "approved") {
-      // pega metadata (foi gravado na preferência)
       const meta = payment.metadata || {};
       const diaIso = meta.diaagendada || meta.diaagendado || "";
       const diaBR = isoToBR(diaIso);
@@ -182,27 +171,20 @@ app.post("/webhook", async (req, res) => {
         reference: payment.external_reference || "",
       };
 
-      // Envia para Google Script (com retries)
       try {
         const scriptResp = await postToGoogleScript(agendamento, 3);
-        console.log("Retorno Google Script:", scriptResp && scriptResp.json ? scriptResp.json : scriptResp);
+        console.log("Retorno Google Script:", scriptResp.json || scriptResp);
       } catch (err) {
         console.error("Erro ao enviar para Google Script:", err.message);
       }
 
-      // Bloqueia o horário na memória (YYYY-MM-DD)
       agendamentos.push({ data: diaIso, horario: hora, servico, nome });
-      console.log("Horário bloqueado (cache):", diaIso, hora);
 
-      // Gera link whatsapp para Bea com detalhes
       const waLink = WHATSAPP_BEA ? buildWhatsAppLink({ nome, servico, diaBr, hora }) : null;
       console.log("Link WhatsApp para Bea:", waLink);
 
-      // opcional: aqui você pode chamar APIs para enviar notificações, telegram, etc.
-
       return res.status(200).json({ ok: true, msg: "Pagamento aprovado e processado", whatsapp_link: waLink });
     } else {
-      console.log("Pagamento não aprovado:", payment.status);
       return res.status(200).json({ ok: false, msg: `Pagamento ${payment.status}` });
     }
   } catch (err) {
