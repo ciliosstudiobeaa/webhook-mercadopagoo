@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
@@ -6,10 +7,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ===== CONFIG =====
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
-// ===== DADOS DOS SERVIÇOS =====
+// ===== SERVIÇOS =====
 const SERVICOS = {
   "Volume brasileiro": 130,
   "Efeito molhado": 140,
@@ -48,19 +50,14 @@ const MANUTENCAO = {
   }
 };
 
-const REMOCAO = {
-  "Remoção nova": 20,
-  "Remoção": 40
-};
-
-// ===== DURAÇÃO EM MINUTOS =====
+// ===== DURAÇÃO (em minutos) =====
 const DURACAO = {
   "Aplicacao": 180,
   "Manutencao": 90,
   "Remocao": 60
 };
 
-// ===== FUNÇÃO AUXILIAR =====
+// ===== FUNÇÕES AUXILIARES =====
 function timeToMinutes(horaStr) {
   const [h, m] = horaStr.split(":").map(Number);
   return h * 60 + m;
@@ -72,16 +69,13 @@ function isOverlap(start1, duration1, start2, duration2){
   return start1 < end2 && start2 < end1;
 }
 
-// ===== ROTA TESTE =====
-app.get("/", (req,res) => res.send("Servidor ativo — Mercado Pago + Google Sheets rodando!"));
-
-// ===== FUNÇÃO PARA VERIFICAR DISPONIBILIDADE =====
 async function horarioDisponivel(tipoAgendamento, dia, hora) {
+  // Consulta planilha
   const abas = ["Agendamentos","Manutencao","Remocao"];
   const duracaoNovo = DURACAO[tipoAgendamento];
   for(const aba of abas){
     const res = await fetch(`${GOOGLE_SCRIPT_URL}?aba=${aba}`);
-    const linhas = await res.json(); // [{diaagendado, horaagendada, tipoAgendamento}]
+    const linhas = await res.json();
     for(const l of linhas){
       const duracaoExistente = DURACAO[l.tipoAgendamento] || 180;
       if(l.diaagendado === dia && isOverlap(timeToMinutes(hora), duracaoNovo, timeToMinutes(l.horaagendada), duracaoExistente)){
@@ -92,40 +86,50 @@ async function horarioDisponivel(tipoAgendamento, dia, hora) {
   return true;
 }
 
+// ===== ROTA TESTE =====
+app.get("/", (req,res) => res.send("Servidor ativo — Mercado Pago + Google Sheets rodando!"));
+
 // ===== GERAR PAGAMENTO =====
 app.post("/gerar-pagamento", async (req,res)=>{
   try{
-    const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada, tipoAgendamento="Aplicacao", manutencaoTipo=null } = req.body;
+    const { nome, whatsapp, servico, diaagendado, horaagendada, tipoAgendamento="Aplicacao", manutencaoTipo=null } = req.body;
 
-    // Verifica horário
+    if(!nome || !whatsapp || !servico || !diaagendado || !horaagendada){
+      return res.status(400).json({error:"Campos obrigatórios ausentes"});
+    }
+
+    // Verifica disponibilidade
     const disponivel = await horarioDisponivel(tipoAgendamento, diaagendado, horaagendada);
     if(!disponivel) return res.status(400).json({error:"Horário indisponível"});
 
-    // Calcula valor correto
+    // Calcula valor
     let valor;
     if(tipoAgendamento==="Aplicacao") valor = SERVICOS[servico];
     else if(tipoAgendamento==="Manutencao") valor = MANUTENCAO[manutencaoTipo][servico];
-    else if(tipoAgendamento==="Remocao") valor = REMOCAO[servico];
-    else valor = precoTotal;
+    else valor = 0; // fallback
 
-    const body = {
-      items:[{title:`Sinal ${tipoAgendamento} - ${servico}`, quantity:1, currency_id:"BRL", unit_price:parseFloat(valor*0.3)}],
+    const preference = {
+      items:[{title:`Sinal ${tipoAgendamento} - ${servico}`, quantity:1, currency_id:"BRL", unit_price:parseFloat((valor*0.3).toFixed(2))}],
       payer:{name:nome,email:`${whatsapp}@ciliosdabea.fake`},
       metadata:{nome, whatsapp, servico, diaagendado, horaagendada, tipoAgendamento, manutencaoTipo},
-      back_urls:{success:`https://wa.me/${whatsapp}`,failure:"https://ciliosdabea.com.br/erro"},
+      back_urls:{success:`https://wa.me/${whatsapp}`, failure:"https://ciliosdabea.com.br/erro", pending:"https://ciliosdabea.com.br/pendente"},
       auto_return:"approved"
     };
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences",{
       method:"POST",
       headers:{"Authorization":`Bearer ${MP_ACCESS_TOKEN}`,"Content-Type":"application/json"},
-      body:JSON.stringify(body)
+      body:JSON.stringify(preference)
     });
 
     const data = await mpRes.json();
+    console.log("Preferência Mercado Pago criada:", data);
     return res.json({init_point:data.init_point});
 
-  }catch(err){console.error(err); res.status(500).json({error:err.message});}
+  }catch(err){
+    console.error("Erro /gerar-pagamento:", err);
+    res.status(500).json({error:err.message});
+  }
 });
 
 // ===== WEBHOOK =====
@@ -142,9 +146,6 @@ app.post("/webhook", async (req,res)=>{
     if(paymentData.status==="approved"){
       const metadata = paymentData.metadata || {};
       const tipoAgendamento = metadata.tipoAgendamento || "Aplicacao";
-      let aba = "Agendamentos";
-      if(tipoAgendamento==="Manutencao") aba="Manutencao";
-      if(tipoAgendamento==="Remocao") aba="Remocao";
 
       const rowData = {
         nome: metadata.nome || "Desconhecido",
@@ -154,22 +155,23 @@ app.post("/webhook", async (req,res)=>{
         valor30: paymentData.transaction_amount || "",
         status: "Aprovado",
         whatsapp: metadata.whatsapp || "",
-        transaction_id: paymentData.transaction_details?.transaction_id || paymentData.id || "",
-        reference: "MP-"+paymentId,
+        transaction_id: paymentData.id,
+        reference: `MP-${paymentId}`,
         tipoAgendamento,
         manutencaoTipo: metadata.manutencaoTipo || ""
       };
 
-      // Adiciona na aba correta
+      // POST para Google Script
       const gRes = await fetch(GOOGLE_SCRIPT_URL,{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({...rowData, aba})
+        body:JSON.stringify(rowData)
       });
-      await gRes.text();
+      const gTxt = await gRes.text();
+      console.log("Linha adicionada na planilha:", gTxt);
 
       // Link WhatsApp automático
-      const msg = encodeURIComponent(`Olá ${metadata.nome}! 💖\n\nSeu pagamento do serviço *${metadata.servico}* foi confirmado!\n📅 Data: ${metadata.diaagendado}\n⏰ Horário: ${metadata.horaagendada}\n\nNos vemos em breve no estúdio Ciliosdabea ✨`);
+      const msg = encodeURIComponent(`Olá ${metadata.nome}! 💖\nSeu pagamento do serviço *${metadata.servico}* foi confirmado!\n📅 Data: ${metadata.diaagendado}\n⏰ Horário: ${metadata.horaagendada}\nNos vemos em breve no estúdio Ciliosdabea ✨`);
       const waLink = `https://wa.me/${metadata.whatsapp}?text=${msg}`;
       console.log("📲 Link WhatsApp automático:", waLink);
 
@@ -178,8 +180,12 @@ app.post("/webhook", async (req,res)=>{
 
     return res.status(200).json({ok:false,msg:"Pagamento não aprovado"});
 
-  }catch(err){console.error(err); res.status(500).json({ok:false,error:err.message});}
+  }catch(err){
+    console.error("Erro webhook:", err);
+    res.status(500).json({ok:false,error:err.message});
+  }
 });
 
+// ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
 app.listen(PORT,()=>console.log(`🚀 Servidor rodando na porta ${PORT}`));
