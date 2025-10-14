@@ -29,7 +29,6 @@ app.post("/gerar-pagamento", async (req, res) => {
     const token = crypto.randomBytes(16).toString("hex");
     validTokens[token] = { nome, whatsapp, servico, diaagendado, horaagendada, createdAt: Date.now() };
 
-    // Configuração da preferência
     const body = {
       items: [
         {
@@ -45,10 +44,10 @@ app.post("/gerar-pagamento", async (req, res) => {
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada, token },
       back_urls: {
-        success: `https://ciliosdabea.netlify.app/sucesso.html?token=${token}`,
+        success: `https://ciliosdabea.netlify.app/aguardando.html?token=${token}`, 
         failure: `https://ciliosdabea.netlify.app/erro.html`,
       },
-      auto_return: "approved",
+      auto_return: "approved", // funciona só para cartão/saldo
     };
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
@@ -63,7 +62,6 @@ app.post("/gerar-pagamento", async (req, res) => {
       return res.status(500).json({ error: "Erro ao gerar pagamento no Mercado Pago", details: data });
     }
 
-    console.log("✅ Preferência criada no Mercado Pago:", data);
     return res.json({ init_point: data.init_point });
 
   } catch (err) {
@@ -86,11 +84,9 @@ app.post("/webhook", async (req, res) => {
     const paymentData = await paymentRes.json();
     console.log("🔎 Status do pagamento:", paymentData.status);
 
-    if (paymentData.status === "approved") {
+    if (["approved", "authorized"].includes(paymentData.status)) { 
       const metadata = paymentData.metadata || {};
       const token = metadata.token;
-
-      // Formatar data BR
       const [ano, mes, dia] = metadata.diaagendado?.split("-") || [];
       const dataBR = dia && mes && ano ? `${dia}/${mes}/${ano}` : metadata.diaagendado || "";
 
@@ -107,15 +103,13 @@ app.post("/webhook", async (req, res) => {
       };
 
       // Enviar para Google Sheets
-      const gRes = await fetch(GOOGLE_SCRIPT_URL, {
+      await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rowData),
       });
-      const gData = await gRes.text();
-      console.log("📤 Retorno do Google Script:", gData);
 
-      // OPCIONAL: Envio automático de WhatsApp via API (exemplo)
+      // Enviar WhatsApp automaticamente (exemplo via API externa)
       try {
         const msg = `Olá ${metadata.nome}! Seu agendamento para ${metadata.servico} em ${dataBR} às ${metadata.horaagendada} foi confirmado! 💅✨`;
         await fetch("https://api.seuservidorwhatsapp.com/send", {
@@ -123,15 +117,14 @@ app.post("/webhook", async (req, res) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ phone: metadata.whatsapp, message: msg })
         });
-        console.log("📲 WhatsApp enviado com sucesso!");
+        console.log("📲 WhatsApp enviado!");
       } catch (err) {
         console.error("❌ Erro ao enviar WhatsApp:", err);
       }
 
-      return res.status(200).json({ ok: true, redirect: `https://ciliosdabea.netlify.app/sucesso.html?token=${token}` });
+      return res.status(200).json({ ok: true, token });
     }
 
-    console.log("Pagamento não aprovado:", paymentData.status);
     return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
 
   } catch (err) {
@@ -140,22 +133,20 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// === VALIDAR TOKEN PARA SUCESSO.HTML ===
+// === VALIDAR TOKEN PARA SUCESSO/AGUARDANDO ===
 app.post("/validate-token", (req, res) => {
   const { token } = req.body;
   if (!token || !validTokens[token]) return res.json({ valid: false });
 
   const data = validTokens[token];
-  // Expira após 5 minutos
   if (Date.now() - data.createdAt > 5 * 60 * 1000) {
     delete validTokens[token];
     return res.json({ valid: false });
   }
 
-  delete validTokens[token]; // invalida após uso
+  delete validTokens[token]; 
   return res.json({ valid: true, data });
 });
 
-// === INICIALIZA SERVIDOR ===
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
