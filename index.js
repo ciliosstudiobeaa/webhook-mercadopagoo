@@ -45,7 +45,7 @@ app.post("/gerar-pagamento", async (req, res) => {
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
-        success: `https://seudominio.com/sucesso.html?token=${token}`,
+        success: `https://ciliosdabea.netlify.app/sucesso.html?token=${token}`,
         failure: `https://seudominio.com/erro.html`,
       },
       auto_return: "approved",
