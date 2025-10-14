@@ -11,12 +11,12 @@ const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
 const paymentStatusMap = {};
 
-// ✅ ROTA DE TESTE
+// ROTA DE TESTE
 app.get("/", (req, res) => {
   res.send("Servidor ativo — integração Mercado Pago + Google Sheets rodando!");
 });
 
-// ✅ GERAR PAGAMENTO
+// GERAR PAGAMENTO
 app.post("/gerar-pagamento", async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
@@ -36,7 +36,7 @@ app.post("/gerar-pagamento", async (req, res) => {
         success: `https://webhook-mercadopagoo.onrender.com/redirect-sucesso`,
         failure: "https://ciliosdabea.netlify.app/erro.html",
       },
-      auto_return: "approved",
+      auto_return: "none", // 🔹 NÃO depende do auto_return
     };
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
@@ -57,12 +57,12 @@ app.post("/gerar-pagamento", async (req, res) => {
 
     return res.json({ init_point: data.init_point, paymentId: data.id });
   } catch (err) {
-    console.error("❌ Erro ao gerar pagamento:", err);
+    console.error("Erro ao gerar pagamento:", err);
     return res.status(500).json({ error: err.message });
   }
 });
 
-// ✅ WEBHOOK MERCADO PAGO
+// WEBHOOK MERCADO PAGO
 app.post("/webhook", async (req, res) => {
   try {
     const paymentId = req.body?.data?.id;
@@ -88,7 +88,6 @@ app.post("/webhook", async (req, res) => {
         reference: "MP-" + paymentId,
       };
 
-      // Envia para Google Script
       await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -100,23 +99,17 @@ app.post("/webhook", async (req, res) => {
 
     return res.status(200).json({ ok: true });
   } catch (err) {
-    console.error("❌ Erro no webhook:", err);
+    console.error("Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// ✅ REDIRECT DE SUCESSO (corrigido)
+// REDIRECT (opcional, ainda útil se o usuário fechar a aba de checkout)
 app.get("/redirect-sucesso", async (req, res) => {
   try {
-    // MP pode mandar payment_id, collection_id ou preference_id
     const paymentId = req.query.payment_id || req.query.collection_id || req.query.preference_id;
+    if (!paymentId) return res.redirect("https://ciliosdabea.netlify.app/erro.html");
 
-    if (!paymentId) {
-      console.log("❌ Nenhum payment_id recebido no redirect.");
-      return res.redirect("https://ciliosdabea.netlify.app/erro.html");
-    }
-
-    // Busca local ou direto no MP
     let record = paymentStatusMap[paymentId];
 
     if (!record) {
@@ -126,29 +119,24 @@ app.get("/redirect-sucesso", async (req, res) => {
       const mpData = await mpRes.json();
 
       if (mpData.status === "approved") {
-        record = {
-          status: "approved",
-          rowData: mpData.metadata || {},
-        };
+        record = { status: "approved", rowData: mpData.metadata || {} };
       }
     }
 
     if (!record || record.status !== "approved") {
-      console.log("⚠️ Pagamento ainda não aprovado no redirect:", paymentId);
       return res.redirect("https://ciliosdabea.netlify.app/erro.html");
     }
 
     const { nome, servico, diaagendado, horaagendada, whatsapp } = record.rowData;
     const query = new URLSearchParams({ nome, servico, diaagendado, horaagendada, whatsapp }).toString();
-
     return res.redirect(`https://ciliosdabea.netlify.app/sucesso.html?${query}`);
   } catch (err) {
-    console.error("❌ Erro no redirect-sucesso:", err);
+    console.error("Erro no redirect-sucesso:", err);
     return res.redirect("https://ciliosdabea.netlify.app/erro.html");
   }
 });
 
-// ✅ STATUS DE PAGAMENTO (polling)
+// STATUS DE PAGAMENTO (polling)
 app.get("/status-pagamento", (req, res) => {
   const { paymentId } = req.query;
   if (!paymentId) return res.status(400).json({ ok: false, msg: "paymentId necessário" });
@@ -160,4 +148,4 @@ app.get("/status-pagamento", (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
