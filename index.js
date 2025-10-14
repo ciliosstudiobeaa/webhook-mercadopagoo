@@ -7,8 +7,11 @@ app.use(cors());
 app.use(express.json());
 
 // === VARIÁVEIS DE AMBIENTE ===
-const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
-const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
+const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;      // Token Mercado Pago
+const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;  // URL do Google Script
+
+// === ARMAZENAMENTO TEMPORÁRIO DE STATUS ===
+const paymentStatusCache = {}; // { paymentId: { ok: true/false, sucessoURL: "..." } }
 
 // === ROTA DE TESTE ===
 app.get("/", (req, res) => {
@@ -27,7 +30,7 @@ app.post("/gerar-pagamento", async (req, res) => {
           title: `Sinal de agendamento - ${servico}`,
           quantity: 1,
           currency_id: "BRL",
-          unit_price: parseFloat(precoTotal * 0.3),
+          unit_price: parseFloat(precoTotal * 0.3), // 30% do valor
         },
       ],
       payer: {
@@ -38,9 +41,8 @@ app.post("/gerar-pagamento", async (req, res) => {
       back_urls: {
         success: "https://ciliosdabea.netlify.app/sucesso.html",
         failure: "https://ciliosdabea.com.br/erro",
-        pending: "https://ciliosdabea.netlify.app/pending.html", // opcional
       },
-      auto_return: "approved", // <<< redireciona automaticamente quando pago
+      auto_return: "approved",
     };
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
@@ -55,9 +57,10 @@ app.post("/gerar-pagamento", async (req, res) => {
     const data = await mpRes.json();
     console.log("✅ Preferência criada:", data.id);
 
-    // Retorna a URL do checkout para o front
-    return res.json({ init_point: data.init_point });
+    // Inicializa cache de status
+    paymentStatusCache[data.id] = { ok: false, sucessoURL: null };
 
+    return res.json({ init_point: data.init_point, paymentId: data.id });
   } catch (err) {
     console.error("❌ Erro ao gerar pagamento:", err);
     return res.status(500).json({ error: err.message });
@@ -99,12 +102,13 @@ app.post("/webhook", async (req, res) => {
         reference: "MP-" + paymentId,
       };
 
-      // Envia para o Google Script
+      // Envia para Google Script
       const gRes = await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rowData),
       });
+
       const gData = await gRes.text();
       console.log("📤 Retorno do Google Script:", gData);
 
@@ -112,8 +116,10 @@ app.post("/webhook", async (req, res) => {
       const sucessoURL = `https://ciliosdabea.netlify.app/sucesso.html?nome=${encodeURIComponent(rowData.nome)}&servico=${encodeURIComponent(rowData.servico)}&diaagendado=${encodeURIComponent(rowData.diaagendado)}&horaagendada=${encodeURIComponent(rowData.horaagendada)}&whatsapp=${encodeURIComponent(rowData.whatsapp)}`;
       console.log("🔗 URL de sucesso gerada:", sucessoURL);
 
-      // Retorna a URL de sucesso para o front
-      return res.status(200).json({ ok: true, sucessoURL });
+      // Atualiza cache para polling
+      paymentStatusCache[paymentId] = { ok: true, sucessoURL };
+
+      return res.status(200).json({ ok: true });
     }
 
     console.log("Pagamento não aprovado, status:", status);
@@ -123,6 +129,13 @@ app.post("/webhook", async (req, res) => {
     console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// === CHECK STATUS PARA POLLING ===
+app.get("/check-status/:paymentId", (req, res) => {
+  const { paymentId } = req.params;
+  const status = paymentStatusCache[paymentId] || { ok: false, sucessoURL: null };
+  return res.json(status);
 });
 
 // === INICIALIZA SERVIDOR ===
