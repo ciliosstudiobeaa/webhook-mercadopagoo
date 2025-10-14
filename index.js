@@ -10,6 +10,9 @@ app.use(express.json());
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
+// === ARMAZENA STATUS TEMPORÁRIO DOS PAGAMENTOS ===
+const paymentStatusMap = {}; // paymentId -> {status, rowData}
+
 // === ROTA DE TESTE ===
 app.get("/", (req, res) => {
   res.send("Servidor ativo — integração Mercado Pago + Google Sheets rodando!");
@@ -21,7 +24,7 @@ app.post("/gerar-pagamento", async (req, res) => {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
     console.log("📦 Dados recebidos do front:", req.body);
 
-    const preference = {
+    const body = {
       items: [
         {
           title: `Sinal de agendamento - ${servico}`,
@@ -36,10 +39,10 @@ app.post("/gerar-pagamento", async (req, res) => {
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
-        success: `https://ciliosdabea.netlify.app/sucesso.html?nome=${encodeURIComponent(nome)}&servico=${encodeURIComponent(servico)}&diaagendado=${encodeURIComponent(diaagendado)}&horaagendada=${encodeURIComponent(horaagendada)}&whatsapp=${encodeURIComponent(whatsapp)}`,
-        failure: "https://ciliosdabea.com.br/erro",
+        success: "https://ciliosdabea.netlify.app/sucesso.html",
+        failure: "https://ciliosdabea.netlify.app/erro.html",
       },
-      auto_return: "approved", // auto-return ao sucesso
+      auto_return: "approved",
     };
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
@@ -48,20 +51,19 @@ app.post("/gerar-pagamento", async (req, res) => {
         "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(preference),
+      body: JSON.stringify(body),
     });
 
     const data = await mpRes.json();
-
-    if (!data.init_point) {
-      console.error("❌ Erro ao criar preferência no Mercado Pago:", data);
-      return res.status(500).json({ error: "Erro ao criar preferência", data });
-    }
-
     console.log("✅ Preferência criada:", data.id);
-    return res.json({ init_point: data.init_point });
+
+    // Salva o status inicial
+    paymentStatusMap[data.id] = { status: "pending", rowData: { nome, whatsapp, servico, diaagendado, horaagendada, precoTotal } };
+
+    return res.json({ init_point: data.init_point, paymentId: data.id });
+
   } catch (err) {
-    console.error("❌ Erro no /gerar-pagamento:", err);
+    console.error("❌ Erro ao gerar pagamento:", err);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -70,18 +72,13 @@ app.post("/gerar-pagamento", async (req, res) => {
 app.post("/webhook", async (req, res) => {
   try {
     console.log("📩 Webhook recebido:", JSON.stringify(req.body));
-
     const paymentId = req.body?.data?.id;
-    if (!paymentId) {
-      console.warn("⚠️ Webhook sem paymentId");
-      return res.status(200).json({ ok: false, msg: "Sem paymentId" });
-    }
+    if (!paymentId) return res.status(200).json({ ok: false, msg: "Sem paymentId" });
 
     const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
     });
     const paymentData = await paymentRes.json();
-
     const status = paymentData.status;
     console.log(`🔎 Status do pagamento ${paymentId}: ${status}`);
 
@@ -101,29 +98,45 @@ app.post("/webhook", async (req, res) => {
         reference: "MP-" + paymentId,
       };
 
-      // Envia para Google Script
-      try {
-        const gRes = await fetch(GOOGLE_SCRIPT_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(rowData),
-        });
-        const gData = await gRes.text();
-        console.log("📤 Retorno do Google Script:", gData);
-      } catch (gsErr) {
-        console.error("❌ Erro ao enviar para Google Script:", gsErr);
-      }
+      // Envia para o Google Script
+      const gRes = await fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rowData),
+      });
+      const gData = await gRes.text();
+      console.log("📤 Retorno do Google Script:", gData);
 
-      return res.status(200).json({ ok: true });
+      // Atualiza o status no map
+      paymentStatusMap[paymentId] = { status: "approved", rowData };
     }
 
-    console.log("Pagamento não aprovado, status:", status);
-    return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
+    return res.status(200).json({ ok: true });
 
   } catch (err) {
     console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// === ROTA PARA POLLING DE STATUS ===
+app.get("/status-pagamento", (req, res) => {
+  const { paymentId } = req.query;
+  if (!paymentId) return res.status(400).json({ ok: false, msg: "paymentId necessário" });
+
+  const record = paymentStatusMap[paymentId];
+  if (!record) return res.json({ status: "pending" });
+
+  const { status, rowData } = record;
+
+  // Formata a data em DD/MM/YYYY
+  const [year, month, day] = rowData.diaagendado.split("-");
+  const diaBR = `${day}/${month}/${year}`;
+
+  // Mensagem pronta para WhatsApp
+  const whatsappMsg = `*Olá ${rowData.nome}!*%0ASeu agendamento de *${rowData.servico}* foi confirmado para *${diaBR}* às *${rowData.horaagendada}*.%0A`;
+
+  res.json({ status, rowData, whatsappMsg });
 });
 
 // === INICIALIZA SERVIDOR ===
