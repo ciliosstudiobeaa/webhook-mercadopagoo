@@ -7,7 +7,6 @@ app.use(cors());
 app.use(express.json());
 
 // === VARIÁVEIS DE AMBIENTE ===
-// Defina essas no painel do Render
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
@@ -39,8 +38,9 @@ app.post("/gerar-pagamento", async (req, res) => {
       back_urls: {
         success: "https://ciliosdabea.netlify.app/sucesso.html",
         failure: "https://ciliosdabea.com.br/erro",
+        pending: "https://ciliosdabea.netlify.app/pending.html", // opcional
       },
-      auto_return: "approved",
+      auto_return: "approved", // <<< redireciona automaticamente quando pago
     };
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
@@ -54,6 +54,8 @@ app.post("/gerar-pagamento", async (req, res) => {
 
     const data = await mpRes.json();
     console.log("✅ Preferência criada:", data.id);
+
+    // Retorna a URL do checkout para o front
     return res.json({ init_point: data.init_point });
 
   } catch (err) {
@@ -103,7 +105,6 @@ app.post("/webhook", async (req, res) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rowData),
       });
-
       const gData = await gRes.text();
       console.log("📤 Retorno do Google Script:", gData);
 
