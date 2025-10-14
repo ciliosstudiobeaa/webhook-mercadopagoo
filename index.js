@@ -7,11 +7,8 @@ app.use(cors());
 app.use(express.json());
 
 // === VARIÁVEIS DE AMBIENTE ===
-const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;      // Token Mercado Pago
-const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;  // URL do Google Script
-
-// === ARMAZENAMENTO TEMPORÁRIO DE STATUS ===
-const paymentStatusCache = {}; // { paymentId: { ok: true/false, sucessoURL: "..." } }
+const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
+const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
 // === ROTA DE TESTE ===
 app.get("/", (req, res) => {
@@ -24,13 +21,13 @@ app.post("/gerar-pagamento", async (req, res) => {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
     console.log("📦 Dados recebidos do front:", req.body);
 
-    const body = {
+    const preference = {
       items: [
         {
           title: `Sinal de agendamento - ${servico}`,
           quantity: 1,
           currency_id: "BRL",
-          unit_price: parseFloat(precoTotal * 0.3), // 30% do valor
+          unit_price: parseFloat(precoTotal * 0.3),
         },
       ],
       payer: {
@@ -39,10 +36,10 @@ app.post("/gerar-pagamento", async (req, res) => {
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
-        success: "https://ciliosdabea.netlify.app/sucesso.html",
+        success: `https://ciliosdabea.netlify.app/sucesso.html?nome=${encodeURIComponent(nome)}&servico=${encodeURIComponent(servico)}&diaagendado=${encodeURIComponent(diaagendado)}&horaagendada=${encodeURIComponent(horaagendada)}&whatsapp=${encodeURIComponent(whatsapp)}`,
         failure: "https://ciliosdabea.com.br/erro",
       },
-      auto_return: "approved",
+      auto_return: "approved", // auto-return ao sucesso
     };
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
@@ -51,18 +48,20 @@ app.post("/gerar-pagamento", async (req, res) => {
         "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(preference),
     });
 
     const data = await mpRes.json();
+
+    if (!data.init_point) {
+      console.error("❌ Erro ao criar preferência no Mercado Pago:", data);
+      return res.status(500).json({ error: "Erro ao criar preferência", data });
+    }
+
     console.log("✅ Preferência criada:", data.id);
-
-    // Inicializa cache de status
-    paymentStatusCache[data.id] = { ok: false, sucessoURL: null };
-
-    return res.json({ init_point: data.init_point, paymentId: data.id });
+    return res.json({ init_point: data.init_point });
   } catch (err) {
-    console.error("❌ Erro ao gerar pagamento:", err);
+    console.error("❌ Erro no /gerar-pagamento:", err);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -103,21 +102,17 @@ app.post("/webhook", async (req, res) => {
       };
 
       // Envia para Google Script
-      const gRes = await fetch(GOOGLE_SCRIPT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(rowData),
-      });
-
-      const gData = await gRes.text();
-      console.log("📤 Retorno do Google Script:", gData);
-
-      // URL de sucesso com os dados
-      const sucessoURL = `https://ciliosdabea.netlify.app/sucesso.html?nome=${encodeURIComponent(rowData.nome)}&servico=${encodeURIComponent(rowData.servico)}&diaagendado=${encodeURIComponent(rowData.diaagendado)}&horaagendada=${encodeURIComponent(rowData.horaagendada)}&whatsapp=${encodeURIComponent(rowData.whatsapp)}`;
-      console.log("🔗 URL de sucesso gerada:", sucessoURL);
-
-      // Atualiza cache para polling
-      paymentStatusCache[paymentId] = { ok: true, sucessoURL };
+      try {
+        const gRes = await fetch(GOOGLE_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(rowData),
+        });
+        const gData = await gRes.text();
+        console.log("📤 Retorno do Google Script:", gData);
+      } catch (gsErr) {
+        console.error("❌ Erro ao enviar para Google Script:", gsErr);
+      }
 
       return res.status(200).json({ ok: true });
     }
@@ -129,13 +124,6 @@ app.post("/webhook", async (req, res) => {
     console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
-});
-
-// === CHECK STATUS PARA POLLING ===
-app.get("/check-status/:paymentId", (req, res) => {
-  const { paymentId } = req.params;
-  const status = paymentStatusCache[paymentId] || { ok: false, sucessoURL: null };
-  return res.json(status);
 });
 
 // === INICIALIZA SERVIDOR ===
