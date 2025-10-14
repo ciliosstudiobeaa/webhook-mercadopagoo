@@ -13,15 +13,17 @@ const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 // Tokens válidos temporários
 let validTokens = {};
 
-// Rota de teste
+// === ROTA DE TESTE ===
 app.get("/", (req, res) => {
+  console.log("⚡ GET / chamado");
   res.send("Servidor ativo — Mercado Pago + Google Sheets rodando!");
 });
 
-// Gerar pagamento
+// === GERAR PAGAMENTO ===
 app.post("/gerar-pagamento", async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
+    console.log("📦 Dados recebidos para pagamento:", req.body);
 
     const body = {
       items: [
@@ -40,31 +42,41 @@ app.post("/gerar-pagamento", async (req, res) => {
     });
 
     const data = await mpRes.json();
+    console.log("✅ Preferência criada no Mercado Pago:", data.id);
     return res.json({ init_point: data.init_point });
 
   } catch (err) {
-    console.error(err);
+    console.error("❌ Erro ao gerar pagamento:", err);
     return res.status(500).json({ error: err.message });
   }
 });
 
-// Webhook Mercado Pago
+// === WEBHOOK MERCADO PAGO ===
 app.post("/webhook", async (req, res) => {
   try {
+    console.log("📩 Webhook recebido:", JSON.stringify(req.body));
+
     const paymentId = req.body?.data?.id;
-    if (!paymentId) return res.status(200).json({ ok: false, msg: "Sem paymentId" });
+    if (!paymentId) {
+      console.warn("⚠️ Webhook sem paymentId");
+      return res.status(200).json({ ok: false, msg: "Sem paymentId" });
+    }
 
     const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
     });
     const paymentData = await paymentRes.json();
 
+    console.log(`🔎 Status do pagamento ${paymentId}:`, paymentData.status);
+
     if (paymentData.status === "approved") {
       const metadata = paymentData.metadata || {};
-      
+      console.log("✅ Pagamento aprovado! Metadata:", metadata);
+
       // Criar token aleatório
       const token = crypto.randomBytes(16).toString("hex");
       validTokens[token] = { ...metadata, createdAt: Date.now() };
+      console.log("🔑 Token gerado:", token);
 
       // Envia para Google Script
       const rowData = {
@@ -79,37 +91,49 @@ app.post("/webhook", async (req, res) => {
         reference: "MP-" + paymentId,
       };
 
-      await fetch(GOOGLE_SCRIPT_URL, {
+      const gRes = await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rowData),
       });
 
+      const gData = await gRes.text();
+      console.log("📤 Retorno do Google Script:", gData);
+
       // Retorna link de sucesso com token
       const successUrl = `https://seudominio.com/sucesso.html?token=${token}`;
+      console.log("🌐 Success URL gerada:", successUrl);
       return res.status(200).json({ ok: true, successUrl });
     }
 
+    console.log("⚠️ Pagamento não aprovado");
     return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
+
   } catch (err) {
-    console.error(err);
+    console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// Validar token (usado pelo sucesso.html)
+// === VALIDAR TOKEN ===
 app.post("/validate-token", (req, res) => {
   const { token } = req.body;
-  if (!token || !validTokens[token]) return res.json({ valid: false });
+  console.log("🔍 Validando token:", token);
 
-  // Token válido, opcionalmente expira após 5 minutos
+  if (!token || !validTokens[token]) {
+    console.warn("❌ Token inválido ou não encontrado");
+    return res.json({ valid: false });
+  }
+
   const data = validTokens[token];
   if (Date.now() - data.createdAt > 5 * 60 * 1000) {
+    console.warn("⚠️ Token expirado");
     delete validTokens[token];
     return res.json({ valid: false });
   }
 
   delete validTokens[token]; // invalida após uso
+  console.log("✅ Token válido:", data);
   return res.json({ valid: true, data });
 });
 
