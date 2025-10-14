@@ -35,7 +35,7 @@ app.post("/gerar-pagamento", async (req, res) => {
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
-        success: `https://seu-site.netlify.app/success.html?nome=${encodeURIComponent(nome)}&whatsapp=${whatsapp}&servico=${encodeURIComponent(servico)}&diaagendado=${diaagendado}&horaagendada=${horaagendada}`,
+        success: `https://seu-site.netlify.app/sucesso.html?nome=${encodeURIComponent(nome)}&whatsapp=${whatsapp}&servico=${encodeURIComponent(servico)}&diaagendado=${diaagendado}&horaagendada=${horaagendada}`,
         failure: `https://seu-site.netlify.app/erro.html`,
       },
       auto_return: "approved",
