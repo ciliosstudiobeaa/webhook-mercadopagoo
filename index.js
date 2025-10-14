@@ -11,19 +11,24 @@ const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
 const paymentStatusMap = {};
 
-// ROTA DE TESTE
+// ✅ ROTA DE TESTE
 app.get("/", (req, res) => {
   res.send("Servidor ativo — integração Mercado Pago + Google Sheets rodando!");
 });
 
-// GERAR PAGAMENTO
+// ✅ GERAR PAGAMENTO
 app.post("/gerar-pagamento", async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
     const body = {
       items: [
-        { title: `Sinal de agendamento - ${servico}`, quantity: 1, currency_id: "BRL", unit_price: parseFloat(precoTotal * 0.3) }
+        {
+          title: `Sinal de agendamento - ${servico}`,
+          quantity: 1,
+          currency_id: "BRL",
+          unit_price: parseFloat(precoTotal * 0.3),
+        },
       ],
       payer: { name: nome, email: `${whatsapp}@ciliosdabea.fake` },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
@@ -37,7 +42,7 @@ app.post("/gerar-pagamento", async (req, res) => {
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -45,16 +50,19 @@ app.post("/gerar-pagamento", async (req, res) => {
 
     const data = await mpRes.json();
 
-    paymentStatusMap[data.id] = { status: "pending", rowData: { nome, whatsapp, servico, diaagendado, horaagendada, precoTotal } };
+    paymentStatusMap[data.id] = {
+      status: "pending",
+      rowData: { nome, whatsapp, servico, diaagendado, horaagendada, precoTotal },
+    };
 
     return res.json({ init_point: data.init_point, paymentId: data.id });
   } catch (err) {
-    console.error("Erro ao gerar pagamento:", err);
+    console.error("❌ Erro ao gerar pagamento:", err);
     return res.status(500).json({ error: err.message });
   }
 });
 
-// WEBHOOK MERCADO PAGO
+// ✅ WEBHOOK MERCADO PAGO
 app.post("/webhook", async (req, res) => {
   try {
     const paymentId = req.body?.data?.id;
@@ -92,27 +100,55 @@ app.post("/webhook", async (req, res) => {
 
     return res.status(200).json({ ok: true });
   } catch (err) {
-    console.error("Erro no webhook:", err);
+    console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// ROTA DE REDIRECIONAMENTO PARA SUCESSO
-app.get("/redirect-sucesso", (req, res) => {
-  const paymentId = req.query.preference_id || req.query.payment_id;
-  const record = paymentStatusMap[paymentId];
+// ✅ REDIRECT DE SUCESSO (corrigido)
+app.get("/redirect-sucesso", async (req, res) => {
+  try {
+    // MP pode mandar payment_id, collection_id ou preference_id
+    const paymentId = req.query.payment_id || req.query.collection_id || req.query.preference_id;
 
-  if (!record || record.status !== "approved") {
+    if (!paymentId) {
+      console.log("❌ Nenhum payment_id recebido no redirect.");
+      return res.redirect("https://ciliosdabea.netlify.app/erro.html");
+    }
+
+    // Busca local ou direto no MP
+    let record = paymentStatusMap[paymentId];
+
+    if (!record) {
+      const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+        headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
+      });
+      const mpData = await mpRes.json();
+
+      if (mpData.status === "approved") {
+        record = {
+          status: "approved",
+          rowData: mpData.metadata || {},
+        };
+      }
+    }
+
+    if (!record || record.status !== "approved") {
+      console.log("⚠️ Pagamento ainda não aprovado no redirect:", paymentId);
+      return res.redirect("https://ciliosdabea.netlify.app/erro.html");
+    }
+
+    const { nome, servico, diaagendado, horaagendada, whatsapp } = record.rowData;
+    const query = new URLSearchParams({ nome, servico, diaagendado, horaagendada, whatsapp }).toString();
+
+    return res.redirect(`https://ciliosdabea.netlify.app/sucesso.html?${query}`);
+  } catch (err) {
+    console.error("❌ Erro no redirect-sucesso:", err);
     return res.redirect("https://ciliosdabea.netlify.app/erro.html");
   }
-
-  const { nome, servico, diaagendado, horaagendada, whatsapp } = record.rowData;
-
-  const query = new URLSearchParams({ nome, servico, diaagendado, horaagendada, whatsapp }).toString();
-  return res.redirect(`https://ciliosdabea.netlify.app/sucesso.html?${query}`);
 });
 
-// STATUS DE PAGAMENTO (polling)
+// ✅ STATUS DE PAGAMENTO (polling)
 app.get("/status-pagamento", (req, res) => {
   const { paymentId } = req.query;
   if (!paymentId) return res.status(400).json({ ok: false, msg: "paymentId necessário" });
@@ -124,4 +160,4 @@ app.get("/status-pagamento", (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
