@@ -11,7 +11,7 @@ app.use(express.json());
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
-// === TOKENS TEMPORÁRIOS PARA SUCESSO.HTML ===
+// Tokens válidos temporários
 let validTokens = {};
 
 // === ROTA DE TESTE ===
@@ -25,66 +25,36 @@ app.post("/gerar-pagamento", async (req, res) => {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
     console.log("📦 Dados recebidos para pagamento:", req.body);
 
-    if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
-      return res.status(400).json({ error: "Todos os campos são obrigatórios" });
-    }
-
-    // === FORMATA DATA PARA BR ===
-    const [ano, mes, dia] = diaagendado.split("-");
-    const dataBr = `${dia}/${mes}/${ano}`;
-
     const body = {
       items: [
         {
           title: `Sinal de agendamento - ${servico}`,
           quantity: 1,
           currency_id: "BRL",
-          unit_price: parseFloat(precoTotal * 0.3),
+          unit_price: Math.max(0.01, parseFloat(precoTotal * 0.3)), // mínimo R$0,01
         },
       ],
       payer: { name: nome, email: `${whatsapp}@ciliosdabea.fake` },
-      metadata: { nome, whatsapp, servico, diaagendado: dataBr, horaagendada },
+      metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: { success: "", failure: "" },
       auto_return: "approved",
     };
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
 
     const data = await mpRes.json();
-    console.log("✅ Retorno completo Mercado Pago:", data);
 
-    if (!data.init_point) {
-      console.error("❌ init_point não retornado:", data);
-      return res.status(500).json({ error: "Não foi possível criar preferência", data });
+    if (data.init_point) {
+      console.log("✅ Preferência criada no Mercado Pago:", data.id);
+      return res.json({ init_point: data.init_point });
+    } else {
+      console.error("❌ Erro ao criar preferência:", JSON.stringify(data));
+      return res.status(500).json({ error: "Não foi possível gerar o init_point", details: data });
     }
-
-    // === ENVIA PARA PLANILHA COMO PENDENTE ===
-    const rowData = {
-      nome,
-      diaagendado: dataBr,
-      horaagendada,
-      servico,
-      valor30: parseFloat(precoTotal * 0.3),
-      status: "Pendente",
-      whatsapp,
-    };
-
-    const gRes = await fetch(GOOGLE_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(rowData),
-    });
-    const gData = await gRes.text();
-    console.log("📤 Retorno do Google Script:", gData);
-
-    return res.json({ init_point: data.init_point });
   } catch (err) {
     console.error("❌ Erro ao gerar pagamento:", err);
     return res.status(500).json({ error: err.message });
@@ -104,24 +74,23 @@ app.post("/webhook", async (req, res) => {
     });
 
     const paymentData = await paymentRes.json();
-    console.log(`🔎 Status do pagamento ${paymentId}:`, paymentData.status);
+    console.log("🔎 Dados do pagamento:", paymentData);
 
     if (paymentData.status === "approved") {
       const metadata = paymentData.metadata || {};
 
-      // === DATA NO FORMATO BR ===
-      const diaag = metadata.diaagendado || "";
-      const horaag = metadata.horaagendada || "";
-
-      // === CRIA TOKEN ALEATÓRIO PARA SUCESSO.HTML ===
+      // Cria token aleatório para página de sucesso
       const token = crypto.randomBytes(16).toString("hex");
       validTokens[token] = { ...metadata, createdAt: Date.now() };
 
-      // === ATUALIZA PLANILHA COMO APROVADO ===
+      // Formata data para BR
+      const diaBR = metadata.diaagendado ? new Date(metadata.diaagendado).toLocaleDateString("pt-BR") : "";
+
+      // Envia para Google Sheets
       const rowData = {
         nome: metadata.nome || "Desconhecido",
-        diaagendado: diaag,
-        horaagendada: horaag,
+        diaagendado: diaBR,
+        horaagendada: metadata.horaagendada || "",
         servico: metadata.servico || "",
         valor30: paymentData.transaction_amount || "",
         status: "Aprovado",
@@ -130,14 +99,18 @@ app.post("/webhook", async (req, res) => {
         reference: "MP-" + paymentId,
       };
 
-      await fetch(GOOGLE_SCRIPT_URL, {
+      const gRes = await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rowData),
       });
 
-      console.log("✅ Pagamento aprovado! Token gerado:", token);
-      return res.status(200).json({ ok: true, successUrl: `https://seudominio.com/sucesso.html?token=${token}` });
+      const gData = await gRes.text();
+      console.log("📤 Retorno do Google Script:", gData);
+
+      // Retorna URL de sucesso com token
+      const successUrl = `https://seudominio.com/sucesso.html?token=${token}`;
+      return res.status(200).json({ ok: true, successUrl });
     }
 
     return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
@@ -147,13 +120,13 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// === VALIDAR TOKEN (usado pelo sucesso.html) ===
+// === VALIDAR TOKEN (USADO PELO sucesso.html) ===
 app.post("/validate-token", (req, res) => {
   const { token } = req.body;
   if (!token || !validTokens[token]) return res.json({ valid: false });
 
   const data = validTokens[token];
-  // expira após 5 minutos
+  // Expira token após 5 minutos
   if (Date.now() - data.createdAt > 5 * 60 * 1000) {
     delete validTokens[token];
     return res.json({ valid: false });
