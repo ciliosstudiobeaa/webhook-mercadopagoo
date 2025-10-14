@@ -1,100 +1,124 @@
 import express from "express";
-import fetch from "node-fetch";
 import cors from "cors";
-import dotenv from "dotenv";
-
-dotenv.config();
+import fetch from "node-fetch";
 
 const app = express();
-app.use(express.json());
 app.use(cors());
+app.use(express.json());
 
-// ✅ Variáveis de ambiente
+// === VARIÁVEIS DE AMBIENTE ===
+// (defina essas no painel do Render)
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
-if (!MP_ACCESS_TOKEN || !GOOGLE_SCRIPT_URL) {
-  console.error("❌ Erro: variáveis de ambiente MP_ACCESS_TOKEN ou GOOGLE_SCRIPT_URL não configuradas.");
-  process.exit(1);
-}
+// === ROTA DE TESTE ===
+app.get("/", (req, res) => {
+  res.send("Servidor ativo — integração Mercado Pago + Google Sheets rodando!");
+});
 
-// ✅ Função (simples) para verificar disponibilidade de horário
-async function horarioDisponivel(diaagendado, horaagendada) {
-  try {
-    console.log("🔎 Verificando horários disponíveis...");
-    const response = await fetch(GOOGLE_SCRIPT_URL);
-    const text = await response.text();
-    console.log("🧾 Resposta da planilha:", text);
-    return true; // provisório: sempre disponível
-  } catch (error) {
-    console.error("⚠️ Erro ao verificar disponibilidade:", error);
-    return false;
-  }
-}
-
-// ✅ Endpoint principal: gerar pagamento
+// === GERAR PAGAMENTO ===
 app.post("/gerar-pagamento", async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
-    console.log("📩 Recebido /gerar-pagamento:", req.body);
+    console.log("📦 Dados recebidos do front:", req.body);
 
-    // Validação
-    if (!nome || !servico || !precoTotal) {
-      return res.status(400).json({ ok: false, error: "Campos obrigatórios ausentes." });
-    }
+    const body = {
+      items: [
+        {
+          title: `Sinal de agendamento - ${servico}`,
+          quantity: 1,
+          currency_id: "BRL",
+          unit_price: parseFloat(precoTotal * 0.3),
+        },
+      ],
+      payer: {
+        name: nome,
+        email: `${whatsapp}@ciliosdabea.fake`, // apenas pra MP aceitar
+      },
+      metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
+      back_urls: {
+        success: "https://wa.me/" + whatsapp,
+        failure: "https://ciliosdabea.com.br/erro",
+      },
+      auto_return: "approved",
+    };
 
-    // Verifica disponibilidade
-    await horarioDisponivel(diaagendado, horaagendada);
-
-    // ✅ Cria preferência Mercado Pago
-    const mpResponse = await fetch("https://api.mercadopago.com/checkout/preferences", {
+    const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
+        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        items: [
-          {
-            title: servico,
-            quantity: 1,
-            unit_price: Number(precoTotal), // 🔧 Garante número
-            currency_id: "BRL",
-          },
-        ],
-        payer: { name: nome },
-        back_urls: {
-          success: "https://example.com/success",
-          failure: "https://example.com/failure",
-        },
-        auto_return: "approved",
-        notification_url: GOOGLE_SCRIPT_URL,
-        metadata: {
-          nome,
-          whatsapp,
-          servico,
-          diaagendado,
-          horaagendada,
-        },
-      }),
+      body: JSON.stringify(body),
     });
 
-    const mpData = await mpResponse.json();
-    console.log("💰 Preferência Mercado Pago criada:", mpData);
+    const data = await mpRes.json();
+    console.log("✅ Preferência criada:", data.id);
+    return res.json({ init_point: data.init_point });
 
-    if (!mpData.init_point) {
-      throw new Error("⚠️ Erro: não foi possível gerar o link de checkout.");
-    }
-
-    // ✅ Retorna o link para o cliente
-    res.json({
-      ok: true,
-      checkout_url: mpData.init_point,
-    });
   } catch (err) {
-    console.error("💥 Erro ao gerar pagamento:", err);
-    res.status(500).json({ ok: false, error: err.message });
+    console.error("❌ Erro ao gerar pagamento:", err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
-app.listen(3000, () => console.log("🚀 Servidor rodando na porta 3000"));
+// === WEBHOOK MERCADO PAGO ===
+app.post("/webhook", async (req, res) => {
+  try {
+    console.log("📩 Webhook recebido:", JSON.stringify(req.body));
+
+    const paymentId = req.body?.data?.id;
+    if (!paymentId) {
+      console.warn("⚠️ Webhook sem paymentId");
+      return res.status(200).json({ ok: false, msg: "Sem paymentId" });
+    }
+
+    const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
+    });
+    const paymentData = await paymentRes.json();
+
+    const status = paymentData.status;
+    console.log(`🔎 Status do pagamento ${paymentId}: ${status}`);
+
+    // Só processa se estiver aprovado
+    if (status === "approved") {
+      console.log("✅ Pagamento aprovado! Enviando para Google Script...");
+
+      const metadata = paymentData.metadata || {};
+      const rowData = {
+        nome: metadata.nome || "Desconhecido",
+        diaagendado: metadata.diaagendado || "",
+        horaagendada: metadata.horaagendada || "",
+        servico: metadata.servico || "",
+        valor30: paymentData.transaction_amount || "",
+        status: "Aprovado",
+        whatsapp: metadata.whatsapp || "",
+        transaction_id: paymentData.transaction_details?.transaction_id || paymentData.id || "",
+        reference: "MP-" + paymentId,
+      };
+
+      const gRes = await fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rowData),
+      });
+
+      const gData = await gRes.text();
+      console.log("📤 Retorno do Google Script:", gData);
+      return res.status(200).json({ ok: true });
+    }
+
+    console.log("Pagamento não aprovado, status:", status);
+    return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
+
+  } catch (err) {
+    console.error("❌ Erro no webhook:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// === INICIALIZA SERVIDOR ===
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
+
