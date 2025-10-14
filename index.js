@@ -10,10 +10,10 @@ app.use(express.json());
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
-// === ARMAZENA STATUS TEMPORÁRIO DOS PAGAMENTOS ===
+// === MAPA DE STATUS DE PAGAMENTO ===
 const paymentStatusMap = {}; // paymentId -> {status, rowData}
 
-// === ROTA DE TESTE ===
+// === ROTA TESTE ===
 app.get("/", (req, res) => {
   res.send("Servidor ativo — integração Mercado Pago + Google Sheets rodando!");
 });
@@ -39,7 +39,7 @@ app.post("/gerar-pagamento", async (req, res) => {
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
-        success: "https://ciliosdabea.netlify.app/sucesso.html",
+        success: `https://ciliosdabea.netlify.app/sucesso.html?nome=${encodeURIComponent(nome)}&whatsapp=${encodeURIComponent(whatsapp)}&servico=${encodeURIComponent(servico)}&diaagendado=${encodeURIComponent(diaagendado)}&horaagendada=${encodeURIComponent(horaagendada)}&valor=${(precoTotal*0.3).toFixed(2)}`,
         failure: "https://ciliosdabea.netlify.app/erro.html",
       },
       auto_return: "approved",
@@ -57,7 +57,7 @@ app.post("/gerar-pagamento", async (req, res) => {
     const data = await mpRes.json();
     console.log("✅ Preferência criada:", data.id);
 
-    // Salva o status inicial
+    // Salva status inicial
     paymentStatusMap[data.id] = { status: "pending", rowData: { nome, whatsapp, servico, diaagendado, horaagendada, precoTotal } };
 
     return res.json({ init_point: data.init_point, paymentId: data.id });
@@ -107,7 +107,7 @@ app.post("/webhook", async (req, res) => {
       const gData = await gRes.text();
       console.log("📤 Retorno do Google Script:", gData);
 
-      // Atualiza o status no map
+      // Atualiza o status
       paymentStatusMap[paymentId] = { status: "approved", rowData };
     }
 
@@ -119,7 +119,7 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// === ROTA PARA POLLING DE STATUS ===
+// === POLLING STATUS ===
 app.get("/status-pagamento", (req, res) => {
   const { paymentId } = req.query;
   if (!paymentId) return res.status(400).json({ ok: false, msg: "paymentId necessário" });
@@ -129,14 +129,7 @@ app.get("/status-pagamento", (req, res) => {
 
   const { status, rowData } = record;
 
-  // Formata a data em DD/MM/YYYY
-  const [year, month, day] = rowData.diaagendado.split("-");
-  const diaBR = `${day}/${month}/${year}`;
-
-  // Mensagem pronta para WhatsApp
-  const whatsappMsg = `*Olá ${rowData.nome}!*%0ASeu agendamento de *${rowData.servico}* foi confirmado para *${diaBR}* às *${rowData.horaagendada}*.%0A`;
-
-  res.json({ status, rowData, whatsappMsg });
+  res.json({ status, rowData });
 });
 
 // === INICIALIZA SERVIDOR ===
