@@ -36,17 +36,17 @@ app.post("/gerar-pagamento", async (req, res) => {
           title: `Sinal de agendamento - ${servico}`,
           quantity: 1,
           currency_id: "BRL",
-          unit_price: parseFloat(precoTotal * 0.3),
+          unit_price: Number(precoTotal) * 0.3,
         },
       ],
       payer: {
         name: nome,
         email: `${whatsapp}@ciliosdabea.fake`,
       },
-      metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
+      metadata: { nome, whatsapp, servico, diaagendado, horaagendada, token },
       back_urls: {
         success: `https://ciliosdabea.netlify.app/sucesso.html?token=${token}`,
-        failure: `https://seudominio.com/erro.html`,
+        failure: `https://ciliosdabea.netlify.app/erro.html`,
       },
       auto_return: "approved",
     };
@@ -84,11 +84,11 @@ app.post("/webhook", async (req, res) => {
       headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
     });
     const paymentData = await paymentRes.json();
-
     console.log("🔎 Status do pagamento:", paymentData.status);
 
     if (paymentData.status === "approved") {
       const metadata = paymentData.metadata || {};
+      const token = metadata.token;
 
       // Formatar data BR
       const [ano, mes, dia] = metadata.diaagendado?.split("-") || [];
@@ -115,7 +115,20 @@ app.post("/webhook", async (req, res) => {
       const gData = await gRes.text();
       console.log("📤 Retorno do Google Script:", gData);
 
-      return res.status(200).json({ ok: true });
+      // OPCIONAL: Envio automático de WhatsApp via API (exemplo)
+      try {
+        const msg = `Olá ${metadata.nome}! Seu agendamento para ${metadata.servico} em ${dataBR} às ${metadata.horaagendada} foi confirmado! 💅✨`;
+        await fetch("https://api.seuservidorwhatsapp.com/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: metadata.whatsapp, message: msg })
+        });
+        console.log("📲 WhatsApp enviado com sucesso!");
+      } catch (err) {
+        console.error("❌ Erro ao enviar WhatsApp:", err);
+      }
+
+      return res.status(200).json({ ok: true, redirect: `https://ciliosdabea.netlify.app/sucesso.html?token=${token}` });
     }
 
     console.log("Pagamento não aprovado:", paymentData.status);
