@@ -25,18 +25,29 @@ app.post("/gerar-pagamento", async (req, res) => {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
     console.log("📦 Dados recebidos para pagamento:", req.body);
 
+    // Gerar token aleatório
+    const token = crypto.randomBytes(16).toString("hex");
+    validTokens[token] = { nome, whatsapp, servico, diaagendado, horaagendada, createdAt: Date.now() };
+
+    // Configuração da preferência
     const body = {
       items: [
         {
           title: `Sinal de agendamento - ${servico}`,
           quantity: 1,
           currency_id: "BRL",
-          unit_price: Math.max(0.01, parseFloat(precoTotal * 0.3)), // mínimo R$0,01
+          unit_price: parseFloat(precoTotal * 0.3),
         },
       ],
-      payer: { name: nome, email: `${whatsapp}@ciliosdabea.fake` },
+      payer: {
+        name: nome,
+        email: `${whatsapp}@ciliosdabea.fake`,
+      },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
-      back_urls: { success: "", failure: "" },
+      back_urls: {
+        success: `https://seudominio.com/sucesso.html?token=${token}`,
+        failure: `https://seudominio.com/erro.html`,
+      },
       auto_return: "approved",
     };
 
@@ -47,14 +58,14 @@ app.post("/gerar-pagamento", async (req, res) => {
     });
 
     const data = await mpRes.json();
-
-    if (data.init_point) {
-      console.log("✅ Preferência criada no Mercado Pago:", data.id);
-      return res.json({ init_point: data.init_point });
-    } else {
-      console.error("❌ Erro ao criar preferência:", JSON.stringify(data));
-      return res.status(500).json({ error: "Não foi possível gerar o init_point", details: data });
+    if (!data.init_point) {
+      console.error("❌ init_point não retornado:", data);
+      return res.status(500).json({ error: "Erro ao gerar pagamento no Mercado Pago", details: data });
     }
+
+    console.log("✅ Preferência criada no Mercado Pago:", data);
+    return res.json({ init_point: data.init_point });
+
   } catch (err) {
     console.error("❌ Erro ao gerar pagamento:", err);
     return res.status(500).json({ error: err.message });
@@ -72,24 +83,20 @@ app.post("/webhook", async (req, res) => {
     const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
     });
-
     const paymentData = await paymentRes.json();
-    console.log("🔎 Dados do pagamento:", paymentData);
+
+    console.log("🔎 Status do pagamento:", paymentData.status);
 
     if (paymentData.status === "approved") {
       const metadata = paymentData.metadata || {};
 
-      // Cria token aleatório para página de sucesso
-      const token = crypto.randomBytes(16).toString("hex");
-      validTokens[token] = { ...metadata, createdAt: Date.now() };
+      // Formatar data BR
+      const [ano, mes, dia] = metadata.diaagendado?.split("-") || [];
+      const dataBR = dia && mes && ano ? `${dia}/${mes}/${ano}` : metadata.diaagendado || "";
 
-      // Formata data para BR
-      const diaBR = metadata.diaagendado ? new Date(metadata.diaagendado).toLocaleDateString("pt-BR") : "";
-
-      // Envia para Google Sheets
       const rowData = {
         nome: metadata.nome || "Desconhecido",
-        diaagendado: diaBR,
+        diaagendado: dataBR,
         horaagendada: metadata.horaagendada || "",
         servico: metadata.servico || "",
         valor30: paymentData.transaction_amount || "",
@@ -99,34 +106,34 @@ app.post("/webhook", async (req, res) => {
         reference: "MP-" + paymentId,
       };
 
+      // Enviar para Google Sheets
       const gRes = await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rowData),
       });
-
       const gData = await gRes.text();
       console.log("📤 Retorno do Google Script:", gData);
 
-      // Retorna URL de sucesso com token
-      const successUrl = `https://seudominio.com/sucesso.html?token=${token}`;
-      return res.status(200).json({ ok: true, successUrl });
+      return res.status(200).json({ ok: true });
     }
 
+    console.log("Pagamento não aprovado:", paymentData.status);
     return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
+
   } catch (err) {
     console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// === VALIDAR TOKEN (USADO PELO sucesso.html) ===
+// === VALIDAR TOKEN PARA SUCESSO.HTML ===
 app.post("/validate-token", (req, res) => {
   const { token } = req.body;
   if (!token || !validTokens[token]) return res.json({ valid: false });
 
   const data = validTokens[token];
-  // Expira token após 5 minutos
+  // Expira após 5 minutos
   if (Date.now() - data.createdAt > 5 * 60 * 1000) {
     delete validTokens[token];
     return res.json({ valid: false });
