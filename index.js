@@ -12,7 +12,8 @@ const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
 // === ARMAZENAMENTO TEMPORÁRIO DE PAGAMENTOS ===
-const pagamentos = {}; // chave: paymentId, valor: status
+// Estrutura: pagamentos[paymentId] = {status, diaagendado, horaagendada}
+const pagamentos = {};
 
 // === ROTA DE TESTE ===
 app.get("/", (req, res) => {
@@ -58,8 +59,8 @@ app.post("/gerar-pagamento", async (req, res) => {
     const data = await mpRes.json();
     console.log("✅ Preferência criada:", data.id);
 
-    // Salva status inicial como pending
-    pagamentos[data.id] = "pending";
+    // Salva status inicial como pending, também salva data e hora
+    pagamentos[data.id] = { status: "pending", diaagendado, horaagendada };
 
     return res.json({ init_point: data.init_point, id: data.id });
 
@@ -83,8 +84,14 @@ app.post("/webhook", async (req, res) => {
     const paymentData = await paymentRes.json();
     const status = paymentData.status;
 
-    // Atualiza status no armazenamento
-    pagamentos[paymentId] = status;
+    // Atualiza status e mantém data/hora
+    pagamentos[paymentId] = {
+      ...pagamentos[paymentId],
+      status,
+      diaagendado: paymentData.metadata?.diaagendado || pagamentos[paymentId]?.diaagendado || "",
+      horaagendada: paymentData.metadata?.horaagendada || pagamentos[paymentId]?.horaagendada || ""
+    };
+
     console.log(`🔎 Status do pagamento ${paymentId}: ${status}`);
 
     // Processa pagamento aprovado
@@ -122,8 +129,22 @@ app.post("/webhook", async (req, res) => {
 // === ROTA DE STATUS PARA FRONTEND ===
 app.get("/status/:paymentId", (req, res) => {
   const { paymentId } = req.params;
-  const status = pagamentos[paymentId] || "pending";
+  const status = pagamentos[paymentId]?.status || "pending";
   res.json({ status });
+});
+
+// === ROTA DE HORÁRIOS OCUPADOS ===
+app.get("/horarios/:date", (req, res) => {
+  const { date } = req.params;
+  const ocupados = [];
+
+  for (const [id, info] of Object.entries(pagamentos)) {
+    if (info.status === "approved" && info.diaagendado === date) {
+      ocupados.push(info.horaagendada);
+    }
+  }
+
+  res.json({ ocupados });
 });
 
 // === INICIALIZA SERVIDOR ===
