@@ -7,17 +7,44 @@ app.use(cors());
 app.use(express.json());
 
 // === VARIÁVEIS DE AMBIENTE ===
-// Defina no Render: MP_ACCESS_TOKEN e GOOGLE_SCRIPT_URL
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
 // === ARMAZENAMENTO TEMPORÁRIO DE PAGAMENTOS ===
-// Estrutura: pagamentos[paymentId] = {status, diaagendado, horaagendada}
-const pagamentos = {};
+const pagamentos = {}; 
+// Estrutura: pagamentos[paymentId] = {status, diaagendado, horaagendada, servico, nome, whatsapp}
 
 // === ROTA DE TESTE ===
 app.get("/", (req, res) => {
   res.send("Servidor ativo — integração Mercado Pago + Google Sheets rodando!");
+});
+
+// === CARREGAR AGENDAMENTOS EXISTENTES DA PLANILHA ===
+app.get("/carregar-agendamentos", async (req, res) => {
+  try {
+    const response = await fetch(GOOGLE_SCRIPT_URL);
+    const data = await response.json(); // Espera um array de agendamentos da planilha
+    console.log("📦 Agendamentos carregados da planilha:", data.length);
+
+    data.forEach((row, index) => {
+      // Criamos um ID fictício único para cada linha
+      const paymentId = `sheet-${index}`;
+      pagamentos[paymentId] = {
+        status: "approved",
+        diaagendado: row.diaagendado,
+        horaagendada: row.horaagendada,
+        servico: row.servico,
+        nome: row.nome,
+        whatsapp: row.whatsapp,
+        reference: row.reference || "",
+      };
+    });
+
+    res.json({ ok: true, total: data.length });
+  } catch (err) {
+    console.error("❌ Erro ao carregar agendamentos:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 // === GERAR PAGAMENTO ===
@@ -59,9 +86,7 @@ app.post("/gerar-pagamento", async (req, res) => {
     const data = await mpRes.json();
     console.log("✅ Preferência criada:", data.id);
 
-    // Salva status inicial como pending, também salva data e hora
-    pagamentos[data.id] = { status: "pending", diaagendado, horaagendada };
-
+    pagamentos[data.id] = { status: "pending", diaagendado, horaagendada, servico, nome, whatsapp };
     return res.json({ init_point: data.init_point, id: data.id });
 
   } catch (err) {
@@ -84,27 +109,27 @@ app.post("/webhook", async (req, res) => {
     const paymentData = await paymentRes.json();
     const status = paymentData.status;
 
-    // Atualiza status e mantém data/hora
     pagamentos[paymentId] = {
       ...pagamentos[paymentId],
       status,
       diaagendado: paymentData.metadata?.diaagendado || pagamentos[paymentId]?.diaagendado || "",
-      horaagendada: paymentData.metadata?.horaagendada || pagamentos[paymentId]?.horaagendada || ""
+      horaagendada: paymentData.metadata?.horaagendada || pagamentos[paymentId]?.horaagendada || "",
+      servico: paymentData.metadata?.servico || pagamentos[paymentId]?.servico || "",
+      nome: paymentData.metadata?.nome || pagamentos[paymentId]?.nome || "",
+      whatsapp: paymentData.metadata?.whatsapp || pagamentos[paymentId]?.whatsapp || "",
     };
 
     console.log(`🔎 Status do pagamento ${paymentId}: ${status}`);
 
-    // Processa pagamento aprovado
     if (status === "approved") {
-      const metadata = paymentData.metadata || {};
       const rowData = {
-        nome: metadata.nome || "Desconhecido",
-        diaagendado: metadata.diaagendado || "",
-        horaagendada: metadata.horaagendada || "",
-        servico: metadata.servico || "",
+        nome: pagamentos[paymentId].nome,
+        diaagendado: pagamentos[paymentId].diaagendado,
+        horaagendada: pagamentos[paymentId].horaagendada,
+        servico: pagamentos[paymentId].servico,
         valor30: paymentData.transaction_amount || "",
         status: "Aprovado",
-        whatsapp: metadata.whatsapp || "",
+        whatsapp: pagamentos[paymentId].whatsapp,
         transaction_id: paymentData.transaction_details?.transaction_id || paymentData.id || "",
         reference: "MP-" + paymentId,
       };
@@ -126,19 +151,19 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// === ROTA DE STATUS PARA FRONTEND ===
+// === STATUS PAGAMENTO ===
 app.get("/status/:paymentId", (req, res) => {
   const { paymentId } = req.params;
   const status = pagamentos[paymentId]?.status || "pending";
   res.json({ status });
 });
 
-// === ROTA DE HORÁRIOS OCUPADOS ===
+// === HORÁRIOS OCUPADOS ===
 app.get("/horarios/:date", (req, res) => {
   const { date } = req.params;
   const ocupados = [];
 
-  for (const [id, info] of Object.entries(pagamentos)) {
+  for (const info of Object.values(pagamentos)) {
     if (info.status === "approved" && info.diaagendado === date) {
       ocupados.push(info.horaagendada);
     }
@@ -149,4 +174,27 @@ app.get("/horarios/:date", (req, res) => {
 
 // === INICIALIZA SERVIDOR ===
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
+app.listen(PORT, async () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+
+  // Carregar agendamentos da planilha ao iniciar
+  try {
+    const res = await fetch(`${GOOGLE_SCRIPT_URL}`);
+    const data = await res.json();
+    data.forEach((row,index)=>{
+      const paymentId = `sheet-${index}`;
+      pagamentos[paymentId] = {
+        status: "approved",
+        diaagendado: row.diaagendado,
+        horaagendada: row.horaagendada,
+        servico: row.servico,
+        nome: row.nome,
+        whatsapp: row.whatsapp,
+        reference: row.reference || "",
+      };
+    });
+    console.log(`📦 ${data.length} agendamentos carregados da planilha.`);
+  } catch(err){
+    console.error("❌ Falha ao carregar agendamentos da planilha:", err);
+  }
+});
