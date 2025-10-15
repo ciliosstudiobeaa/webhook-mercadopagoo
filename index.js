@@ -7,12 +7,12 @@ app.use(cors());
 app.use(express.json());
 
 // === VARIÁVEIS DE AMBIENTE ===
+// Defina essas no painel do Render
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
 // === ROTA DE TESTE ===
 app.get("/", (req, res) => {
-  console.log("✅ Servidor ativo — teste GET /");
   res.send("Servidor ativo — integração Mercado Pago + Google Sheets rodando!");
 });
 
@@ -20,7 +20,7 @@ app.get("/", (req, res) => {
 app.post("/gerar-pagamento", async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
-    console.log("📦 Dados recebidos do frontend:", req.body);
+    console.log("📦 Dados recebidos do front:", req.body);
 
     const body = {
       items: [
@@ -33,7 +33,7 @@ app.post("/gerar-pagamento", async (req, res) => {
       ],
       payer: {
         name: nome,
-        email: `${whatsapp}@ciliosdabea.fake`,
+        email: `${whatsapp}@ciliosdabea.fake`, // apenas pra Mercado Pago aceitar
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
@@ -53,9 +53,7 @@ app.post("/gerar-pagamento", async (req, res) => {
     });
 
     const data = await mpRes.json();
-    console.log("✅ Preferência criada:", data);
-
-    // Retorna init_point + id da preferência
+    console.log("✅ Preferência criada:", data.id);
     return res.json({ init_point: data.init_point, id: data.id });
 
   } catch (err) {
@@ -70,7 +68,7 @@ app.post("/webhook", async (req, res) => {
     console.log("📩 Webhook recebido:", JSON.stringify(req.body));
 
     const paymentId = req.body?.data?.id;
-    if(!paymentId){
+    if (!paymentId) {
       console.warn("⚠️ Webhook sem paymentId");
       return res.status(200).json({ ok: false, msg: "Sem paymentId" });
     }
@@ -80,10 +78,11 @@ app.post("/webhook", async (req, res) => {
     });
     const paymentData = await paymentRes.json();
 
-    console.log("🔎 Dados do pagamento do Mercado Pago:", paymentData);
-
     const status = paymentData.status;
-    if(status === "approved"){
+    console.log(`🔎 Status do pagamento ${paymentId}: ${status}`);
+
+    // Só processa se estiver aprovado
+    if (status === "approved") {
       console.log("✅ Pagamento aprovado! Enviando para Google Script...");
 
       const metadata = paymentData.metadata || {};
@@ -99,50 +98,49 @@ app.post("/webhook", async (req, res) => {
         reference: "MP-" + paymentId,
       };
 
-      console.log("📤 Dados enviados para Google Script:", rowData);
-
       const gRes = await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rowData),
       });
+
       const gData = await gRes.text();
+      console.log("📤 Dados enviados para Google Script:", rowData);
       console.log("📬 Retorno do Google Script:", gData);
 
       return res.status(200).json({ ok: true });
     }
 
-    console.log("⚠️ Pagamento não aprovado, status:", status);
+    console.log("Pagamento não aprovado, status:", status);
     return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
 
-  } catch(err){
+  } catch (err) {
     console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// === STATUS PAGAMENTO (para o aguardando.html) ===
+// === ROTA PARA CONSULTAR STATUS DO PAGAMENTO ===
 app.get("/status-pagamento", async (req, res) => {
   try {
     const paymentId = req.query.paymentId;
-    if(!paymentId) return res.status(400).json({ status: "error", msg: "paymentId não fornecido" });
+    if (!paymentId) return res.status(400).json({ error: "paymentId não fornecido" });
 
-    const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+    const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
     });
-    const paymentData = await mpRes.json();
+    const paymentData = await paymentRes.json();
 
-    console.log("🔎 Consulta status pagamento:", paymentData.id, paymentData.status);
+    console.log(`🔎 Consulta status pagamento: ${paymentId}`, paymentData.status);
 
-    let retorno = { status: "pending" };
-    if(paymentData.status === "approved") retorno.status = "approved";
-    else if(paymentData.status === "rejected" || paymentData.status === "cancelled") retorno.status = "rejected";
-
-    return res.json(retorno);
-
-  } catch(err){
-    console.error("❌ Erro ao consultar status do pagamento:", err);
-    return res.status(500).json({ status: "error", msg: err.message });
+    return res.json({
+      status: paymentData.status,
+      transaction_id: paymentData.id,
+      transaction_amount: paymentData.transaction_amount,
+    });
+  } catch (err) {
+    console.error("❌ Erro ao consultar status:", err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
