@@ -7,7 +7,6 @@ app.use(cors());
 app.use(express.json());
 
 // === VARIÁVEIS DE AMBIENTE ===
-// Defina no Render: MP_ACCESS_TOKEN e GOOGLE_SCRIPT_URL
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
@@ -34,11 +33,11 @@ app.post("/gerar-pagamento", async (req, res) => {
       ],
       payer: {
         name: nome,
-        email: `${whatsapp}@ciliosdabea.fake`, // só pra Mercado Pago aceitar
+        email: `${whatsapp}@ciliosdabea.fake`,
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
-        success: "https://ciliosdabea.netlify.app/aguardando.html", // redireciona para a página de aguardando
+        success: "https://ciliosdabea.netlify.app/aguardando.html",
         failure: "https://ciliosdabea.com.br/erro",
       },
       auto_return: "approved",
@@ -56,7 +55,8 @@ app.post("/gerar-pagamento", async (req, res) => {
     const data = await mpRes.json();
     console.log("✅ Preferência criada:", data);
 
-    return res.json({ init_point: data.init_point });
+    // Retorna init_point + id da preferência
+    return res.json({ init_point: data.init_point, id: data.id });
 
   } catch (err) {
     console.error("❌ Erro ao gerar pagamento:", err);
