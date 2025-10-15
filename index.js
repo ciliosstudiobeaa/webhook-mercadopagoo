@@ -6,15 +6,17 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// ⚙️ Substitua pelo seu token de acesso do Mercado Pago
-const TOKEN = "APP_USR-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-xxxxxxxxxx";
+const TOKEN = process.env.MP_ACCESS_TOKEN; // 🔐 Token do Mercado Pago
+const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL; // 🔗 Planilha Google
 
-let paymentStatusMap = {}; // Armazena o status dos pagamentos em memória
+let paymentStatusMap = {}; // Armazena o status em memória
 
-// 🚀 Gera a preferência de pagamento
+// 🚀 Criação da preferência de pagamento
 app.post("/gerar-pagamento", async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
+
+    const baseUrl = "https://seusite.netlify.app"; // 🟡 Substitua pelo domínio do seu site
 
     const preference = {
       items: [
@@ -25,13 +27,11 @@ app.post("/gerar-pagamento", async (req, res) => {
           currency_id: "BRL",
         },
       ],
-      payer: {
-        name: nome,
-      },
+      payer: { name: nome },
       back_urls: {
-        success: `https://seusite.netlify.app/aguardando.html?paymentId={payment_id}&nome=${encodeURIComponent(nome)}&whatsapp=${encodeURIComponent(whatsapp)}&servico=${encodeURIComponent(servico)}&diaagendado=${encodeURIComponent(diaagendado)}&horaagendada=${encodeURIComponent(horaagendada)}`,
-        pending: `https://seusite.netlify.app/aguardando.html?paymentId={payment_id}&nome=${encodeURIComponent(nome)}&whatsapp=${encodeURIComponent(whatsapp)}&servico=${encodeURIComponent(servico)}&diaagendado=${encodeURIComponent(diaagendado)}&horaagendada=${encodeURIComponent(horaagendada)}`,
-        failure: `https://seusite.netlify.app/erro.html`,
+        success: `${baseUrl}https://ciliosdabea.netlify.app/aguardando.html?paymentId=1054558395-723ef7db-2be7-4d3d-b91a-a09cc6bc6e8a&nome=Msmsjsisnsndksn&whatsapp=19999016506&servico=Efeito%20Mega&diaagendado=2025-10-15&horaagendada=18%3A00/aguardando.html?paymentId={payment_id}&nome=${encodeURIComponent(nome)}&whatsapp=${encodeURIComponent(whatsapp)}&servico=${encodeURIComponent(servico)}&diaagendado=${encodeURIComponent(diaagendado)}&horaagendada=${encodeURIComponent(horaagendada)}`,
+        pending: `${baseUrl}https://ciliosdabea.netlify.app/aguardando.html?paymentId=1054558395-723ef7db-2be7-4d3d-b91a-a09cc6bc6e8a&nome=Msmsjsisnsndksn&whatsapp=19999016506&servico=Efeito%20Mega&diaagendado=2025-10-15&horaagendada=18%3A00/aguardando.html?paymentId={payment_id}&nome=${encodeURIComponent(nome)}&whatsapp=${encodeURIComponent(whatsapp)}&servico=${encodeURIComponent(servico)}&diaagendado=${encodeURIComponent(diaagendado)}&horaagendada=${encodeURIComponent(horaagendada)}`,
+        failure: `${baseUrl}https://ciliosdabea.netlify.app/aguardando.html?paymentId=1054558395-723ef7db-2be7-4d3d-b91a-a09cc6bc6e8a&nome=Msmsjsisnsndksn&whatsapp=19999016506&servico=Efeito%20Mega&diaagendado=2025-10-15&horaagendada=18%3A00/erro.html`,
       },
       auto_return: "approved",
       notification_url: "https://webhook-mercadopagoo.onrender.com/webhook",
@@ -49,21 +49,18 @@ app.post("/gerar-pagamento", async (req, res) => {
     const data = await response.json();
 
     if (!data.init_point) {
-      console.log("❌ Erro ao gerar pagamento:", data);
+      console.error("❌ Erro ao gerar pagamento:", data);
       return res.status(400).json({ error: "Erro ao criar pagamento", data });
     }
 
-    res.json({
-      url: data.init_point,
-      id: data.id,
-    });
+    res.json({ url: data.init_point, id: data.id });
   } catch (err) {
     console.error("Erro ao gerar pagamento:", err);
-    res.status(500).json({ error: "Erro interno no servidor" });
+    res.status(500).json({ error: "Erro interno" });
   }
 });
 
-// 🧩 Webhook do Mercado Pago (recebe notificações automáticas)
+// 🔔 Webhook Mercado Pago
 app.post("/webhook", async (req, res) => {
   try {
     const { type, data } = req.body;
@@ -75,9 +72,25 @@ app.post("/webhook", async (req, res) => {
     });
 
     const paymentData = await response.json();
-    if (paymentData.id) {
-      paymentStatusMap[paymentData.id] = paymentData.status;
-      console.log(`✅ Pagamento ${paymentData.id} atualizado para: ${paymentData.status}`);
+    if (!paymentData.id) return res.sendStatus(200);
+
+    paymentStatusMap[paymentData.id] = paymentData.status;
+    console.log(`✅ Pagamento ${paymentData.id}: ${paymentData.status}`);
+
+    // Se aprovado, envia para o Google Script
+    if (paymentData.status === "approved") {
+      await fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nome: paymentData.payer?.first_name || "",
+          servico: paymentData.description || "",
+          valor: paymentData.transaction_amount,
+          status: paymentData.status,
+          paymentId: paymentData.id,
+        }),
+      });
+      console.log("📊 Dados enviados para Google Sheets!");
     }
 
     res.sendStatus(200);
@@ -87,17 +100,15 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// 🔍 Endpoint para verificar o status do pagamento
+// 🔎 Verificação de status (usado pela página aguardando.html)
 app.get("/status-pagamento", async (req, res) => {
   const { paymentId } = req.query;
   if (!paymentId) return res.status(400).json({ error: "Faltando paymentId" });
 
-  // Se já tiver salvo em memória, retorna direto
   if (paymentStatusMap[paymentId]) {
     return res.json({ status: paymentStatusMap[paymentId] });
   }
 
-  // Caso contrário, busca direto da API do Mercado Pago
   try {
     const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${TOKEN}` },
