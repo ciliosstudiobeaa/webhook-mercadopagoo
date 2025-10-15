@@ -38,7 +38,7 @@ app.post("/gerar-pagamento", async (req, res) => {
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
-        success: "https://aguardando.ciliosdabea.com.br", // redireciona para a página de aguardando
+        success: "https://ciliosdabea.netlify.app/aguardando.html", // redireciona para a página de aguardando
         failure: "https://ciliosdabea.com.br/erro",
       },
       auto_return: "approved",
