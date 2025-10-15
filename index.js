@@ -7,9 +7,12 @@ app.use(cors());
 app.use(express.json());
 
 // === VARIÁVEIS DE AMBIENTE ===
-// Defina essas no painel do Render
+// Defina no Render: MP_ACCESS_TOKEN e GOOGLE_SCRIPT_URL
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
+
+// === ARMAZENAMENTO TEMPORÁRIO DE PAGAMENTOS ===
+const pagamentos = {}; // chave: paymentId, valor: status
 
 // === ROTA DE TESTE ===
 app.get("/", (req, res) => {
@@ -33,11 +36,11 @@ app.post("/gerar-pagamento", async (req, res) => {
       ],
       payer: {
         name: nome,
-        email: `${whatsapp}@ciliosdabea.fake`, // apenas pra Mercado Pago aceitar
+        email: `${whatsapp}@ciliosdabea.fake`,
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
-        success: "https://ciliosdabea.netlify.app/aguardando.html",
+        success: "https://ciliosdabea.com.br/aguardando",
         failure: "https://ciliosdabea.com.br/erro",
       },
       auto_return: "approved",
@@ -54,6 +57,10 @@ app.post("/gerar-pagamento", async (req, res) => {
 
     const data = await mpRes.json();
     console.log("✅ Preferência criada:", data.id);
+
+    // Salva status inicial como pending
+    pagamentos[data.id] = "pending";
+
     return res.json({ init_point: data.init_point, id: data.id });
 
   } catch (err) {
@@ -68,23 +75,20 @@ app.post("/webhook", async (req, res) => {
     console.log("📩 Webhook recebido:", JSON.stringify(req.body));
 
     const paymentId = req.body?.data?.id;
-    if (!paymentId) {
-      console.warn("⚠️ Webhook sem paymentId");
-      return res.status(200).json({ ok: false, msg: "Sem paymentId" });
-    }
+    if (!paymentId) return res.status(200).json({ ok: false, msg: "Sem paymentId" });
 
     const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
     });
     const paymentData = await paymentRes.json();
-
     const status = paymentData.status;
+
+    // Atualiza status no armazenamento
+    pagamentos[paymentId] = status;
     console.log(`🔎 Status do pagamento ${paymentId}: ${status}`);
 
-    // Só processa se estiver aprovado
+    // Processa pagamento aprovado
     if (status === "approved") {
-      console.log("✅ Pagamento aprovado! Enviando para Google Script...");
-
       const metadata = paymentData.metadata || {};
       const rowData = {
         nome: metadata.nome || "Desconhecido",
@@ -105,43 +109,21 @@ app.post("/webhook", async (req, res) => {
       });
 
       const gData = await gRes.text();
-      console.log("📤 Dados enviados para Google Script:", rowData);
-      console.log("📬 Retorno do Google Script:", gData);
-
-      return res.status(200).json({ ok: true });
+      console.log("📤 Retorno do Google Script:", gData);
     }
 
-    console.log("Pagamento não aprovado, status:", status);
-    return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
-
+    return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// === ROTA PARA CONSULTAR STATUS DO PAGAMENTO ===
-app.get("/status-pagamento", async (req, res) => {
-  try {
-    const paymentId = req.query.paymentId;
-    if (!paymentId) return res.status(400).json({ error: "paymentId não fornecido" });
-
-    const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
-    });
-    const paymentData = await paymentRes.json();
-
-    console.log(`🔎 Consulta status pagamento: ${paymentId}`, paymentData.status);
-
-    return res.json({
-      status: paymentData.status,
-      transaction_id: paymentData.id,
-      transaction_amount: paymentData.transaction_amount,
-    });
-  } catch (err) {
-    console.error("❌ Erro ao consultar status:", err);
-    return res.status(500).json({ error: err.message });
-  }
+// === ROTA DE STATUS PARA FRONTEND ===
+app.get("/status/:paymentId", (req, res) => {
+  const { paymentId } = req.params;
+  const status = pagamentos[paymentId] || "pending";
+  res.json({ status });
 });
 
 // === INICIALIZA SERVIDOR ===
