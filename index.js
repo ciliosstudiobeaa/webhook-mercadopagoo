@@ -3,128 +3,132 @@ import cors from "cors";
 import fetch from "node-fetch";
 
 const app = express();
-app.use(express.json());
 app.use(cors());
+app.use(express.json());
 
-const TOKEN = process.env.MP_ACCESS_TOKEN; // 🔐 Token do Mercado Pago
-const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL; // 🔗 Planilha Google
+// === VARIÁVEIS DE AMBIENTE ===
+const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
+const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
-let paymentStatusMap = {}; // Armazena o status em memória
+// === MAPA LOCAL DE STATUS ===
+const paymentStatusMap = {};
 
-// 🚀 Criação da preferência de pagamento
+// === TESTE ===
+app.get("/", (req, res) => {
+  res.send("🚀 Servidor ativo — Cílios da Bea integrado com Mercado Pago e Google Sheets!");
+});
+
+// === GERAR PAGAMENTO ===
 app.post("/gerar-pagamento", async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
+    console.log("📦 Dados recebidos do front:", req.body);
 
-    const baseUrl = "https://seusite.netlify.app"; // 🟡 Substitua pelo domínio do seu site
-
-    const preference = {
+    // Cria a preferência de pagamento
+    const body = {
       items: [
         {
-          title: `${servico} — ${nome}`,
+          title: `Sinal de agendamento - ${servico}`,
           quantity: 1,
-          unit_price: precoTotal,
           currency_id: "BRL",
+          unit_price: parseFloat(precoTotal * 0.3),
         },
       ],
-      payer: { name: nome },
+      payer: { name: nome, email: `${whatsapp}@ciliosdabea.fake` },
+      metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
-        success: `${baseUrl}https://ciliosdabea.netlify.app/aguardando.html?paymentId=1054558395-723ef7db-2be7-4d3d-b91a-a09cc6bc6e8a&nome=Msmsjsisnsndksn&whatsapp=19999016506&servico=Efeito%20Mega&diaagendado=2025-10-15&horaagendada=18%3A00/aguardando.html?paymentId={payment_id}&nome=${encodeURIComponent(nome)}&whatsapp=${encodeURIComponent(whatsapp)}&servico=${encodeURIComponent(servico)}&diaagendado=${encodeURIComponent(diaagendado)}&horaagendada=${encodeURIComponent(horaagendada)}`,
-        pending: `${baseUrl}https://ciliosdabea.netlify.app/aguardando.html?paymentId=1054558395-723ef7db-2be7-4d3d-b91a-a09cc6bc6e8a&nome=Msmsjsisnsndksn&whatsapp=19999016506&servico=Efeito%20Mega&diaagendado=2025-10-15&horaagendada=18%3A00/aguardando.html?paymentId={payment_id}&nome=${encodeURIComponent(nome)}&whatsapp=${encodeURIComponent(whatsapp)}&servico=${encodeURIComponent(servico)}&diaagendado=${encodeURIComponent(diaagendado)}&horaagendada=${encodeURIComponent(horaagendada)}`,
-        failure: `${baseUrl}https://ciliosdabea.netlify.app/aguardando.html?paymentId=1054558395-723ef7db-2be7-4d3d-b91a-a09cc6bc6e8a&nome=Msmsjsisnsndksn&whatsapp=19999016506&servico=Efeito%20Mega&diaagendado=2025-10-15&horaagendada=18%3A00/erro.html`,
+        success: `https://ciliosdabea.netlify.app/aguardando.html?paymentId=__PAYMENT_ID__&nome=${encodeURIComponent(
+          nome
+        )}&whatsapp=${encodeURIComponent(whatsapp)}&servico=${encodeURIComponent(
+          servico
+        )}&diaagendado=${encodeURIComponent(
+          diaagendado
+        )}&horaagendada=${encodeURIComponent(horaagendada)}`,
+        failure: "https://ciliosdabea.netlify.app/erro.html",
       },
       auto_return: "approved",
       notification_url: "https://webhook-mercadopagoo.onrender.com/webhook",
     };
 
-    const response = await fetch("https://api.mercadopago.com/checkout/preferences", {
+    const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${TOKEN}`,
+        Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(preference),
+      body: JSON.stringify(body),
     });
 
-    const data = await response.json();
+    const data = await mpRes.json();
+    console.log("✅ Preferência criada com sucesso:", data);
 
-    if (!data.init_point) {
-      console.error("❌ Erro ao gerar pagamento:", data);
-      return res.status(400).json({ error: "Erro ao criar pagamento", data });
-    }
-
-    res.json({ url: data.init_point, id: data.id });
+    paymentStatusMap[data.id] = { status: "pending" };
+    return res.json({ init_point: data.init_point, id: data.id });
   } catch (err) {
-    console.error("Erro ao gerar pagamento:", err);
-    res.status(500).json({ error: "Erro interno" });
+    console.error("❌ Erro ao gerar pagamento:", err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// 🔔 Webhook Mercado Pago
+// === WEBHOOK DO MERCADO PAGO ===
 app.post("/webhook", async (req, res) => {
   try {
-    const { type, data } = req.body;
-    if (type !== "payment") return res.sendStatus(200);
+    console.log("📩 Webhook recebido:", JSON.stringify(req.body, null, 2));
 
-    const paymentId = data.id;
-    const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-      headers: { Authorization: `Bearer ${TOKEN}` },
+    const paymentId = req.body?.data?.id;
+    if (!paymentId) {
+      console.warn("⚠️ Webhook sem paymentId válido.");
+      return res.status(200).json({ ok: false });
+    }
+
+    const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
     });
 
-    const paymentData = await response.json();
-    if (!paymentData.id) return res.sendStatus(200);
+    const paymentData = await paymentRes.json();
+    console.log("💳 Detalhes do pagamento:", paymentData);
 
-    paymentStatusMap[paymentData.id] = paymentData.status;
-    console.log(`✅ Pagamento ${paymentData.id}: ${paymentData.status}`);
+    const status = paymentData.status;
 
-    // Se aprovado, envia para o Google Script
-    if (paymentData.status === "approved") {
+    if (status === "approved") {
+      console.log("✅ Pagamento aprovado, enviando dados para o Google Sheets...");
+
+      const meta = paymentData.metadata || {};
+      const rowData = {
+        nome: meta.nome,
+        whatsapp: meta.whatsapp,
+        servico: meta.servico,
+        diaagendado: meta.diaagendado,
+        horaagendada: meta.horaagendada,
+        valor30: paymentData.transaction_amount,
+        status: "Aprovado",
+        reference: "MP-" + paymentId,
+      };
+
       await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          nome: paymentData.payer?.first_name || "",
-          servico: paymentData.description || "",
-          valor: paymentData.transaction_amount,
-          status: paymentData.status,
-          paymentId: paymentData.id,
-        }),
+        body: JSON.stringify(rowData),
       });
-      console.log("📊 Dados enviados para Google Sheets!");
+
+      paymentStatusMap[paymentData.order?.id || paymentId] = { status: "approved" };
     }
 
-    res.sendStatus(200);
+    res.status(200).json({ ok: true });
   } catch (err) {
-    console.error("Erro no webhook:", err);
-    res.sendStatus(500);
+    console.error("❌ Erro no webhook:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// 🔎 Verificação de status (usado pela página aguardando.html)
-app.get("/status-pagamento", async (req, res) => {
+// === STATUS DO PAGAMENTO ===
+app.get("/status-pagamento", (req, res) => {
   const { paymentId } = req.query;
-  if (!paymentId) return res.status(400).json({ error: "Faltando paymentId" });
-
-  if (paymentStatusMap[paymentId]) {
-    return res.json({ status: paymentStatusMap[paymentId] });
-  }
-
-  try {
-    const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-      headers: { Authorization: `Bearer ${TOKEN}` },
-    });
-    const data = await response.json();
-
-    if (data.status) {
-      paymentStatusMap[paymentId] = data.status;
-      return res.json({ status: data.status });
-    } else {
-      return res.status(404).json({ status: "not_found" });
-    }
-  } catch (err) {
-    console.error("Erro ao consultar status:", err);
-    res.status(500).json({ error: "Erro ao consultar status" });
-  }
+  const status = paymentStatusMap[paymentId]?.status || "pending";
+  console.log(`🔍 Consulta de status ${paymentId}: ${status}`);
+  res.json({ status });
 });
 
-app.listen(10000, () => console.log("✅ Servidor rodando na porta 10000"));
+// === INICIALIZA SERVIDOR ===
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`🔥 Servidor rodando na porta ${PORT}`));
