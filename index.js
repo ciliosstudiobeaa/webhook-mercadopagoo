@@ -14,6 +14,7 @@ const paymentStatusMap = {};
 // TESTE
 app.get("/", (req,res)=>res.send("Servidor ativo!"));
 
+// GERAR PAGAMENTO
 app.post("/gerar-pagamento", async (req,res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
@@ -22,7 +23,10 @@ app.post("/gerar-pagamento", async (req,res) => {
       items: [{ title: `Sinal - ${servico}`, quantity:1, currency_id:"BRL", unit_price: parseFloat(precoTotal*0.3) }],
       payer: { name: nome, email: `${whatsapp}@ciliosdabea.fake` },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
-      back_urls: { success:`https://webhook-mercadopagoo.onrender.com/redirect-sucesso`, failure:`https://ciliosdabea.netlify.app/erro.html` },
+      back_urls: { 
+        success:`https://webhook-mercadopagoo.onrender.com/redirect-sucesso`, 
+        failure:`https://ciliosdabea.netlify.app/erro.html` 
+      },
       auto_return:"approved"
     };
 
@@ -70,6 +74,7 @@ app.post("/webhook", async (req,res)=>{
         reference: "MP-"+paymentId
       };
 
+      // Envia para Google Script
       await fetch(GOOGLE_SCRIPT_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(rowData) });
 
       paymentStatusMap[paymentId] = { status:"approved", rowData };
@@ -81,20 +86,6 @@ app.post("/webhook", async (req,res)=>{
     console.error("Erro no webhook:",err);
     return res.status(500).json({ok:false,error:err.message});
   }
-});
-
-// REDIRECT SUCESSO
-app.get("/redirect-sucesso", (req,res)=>{
-  const paymentId = req.query.preference_id || req.query.payment_id;
-  const record = paymentStatusMap[paymentId];
-
-  if(!record || record.status!=="approved"){
-    return res.redirect("https://ciliosdabea.netlify.app/erro.html");
-  }
-
-  const { nome, servico, diaagendado, horaagendada, whatsapp } = record.rowData;
-  const query = new URLSearchParams({ nome, servico, diaagendado, horaagendada, whatsapp }).toString();
-  return res.redirect(`https://ciliosdabea.netlify.app/sucesso.html?${query}`);
 });
 
 // STATUS PAGAMENTO (polling)
