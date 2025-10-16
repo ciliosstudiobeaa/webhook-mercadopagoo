@@ -29,10 +29,7 @@ app.post("/gerar-pagamento", async (req, res) => {
           unit_price: parseFloat(precoTotal * 0.3),
         },
       ],
-      payer: {
-        name: nome,
-        email: `${whatsapp}@ciliosdabea.fake`, // só pra MP aceitar
-      },
+      payer: { name: nome, email: `${whatsapp}@ciliosdabea.fake` },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
         success: `https://wa.me/${whatsapp}`,
@@ -53,6 +50,7 @@ app.post("/gerar-pagamento", async (req, res) => {
     const data = await mpRes.json();
     console.log("✅ Preferência criada:", data.id);
     return res.json({ init_point: data.init_point });
+
   } catch (err) {
     console.error("❌ Erro ao gerar pagamento:", err);
     return res.status(500).json({ error: err.message });
@@ -80,7 +78,7 @@ app.post("/webhook", async (req, res) => {
 
       const metadata = paymentData.metadata || {};
       const rowData = {
-        nome: metadata.nome || "",
+        nome: metadata.nome || "Desconhecido",
         diaagendado: metadata.diaagendado || "",
         horaagendada: metadata.horaagendada || "",
         servico: metadata.servico || "",
@@ -104,6 +102,7 @@ app.post("/webhook", async (req, res) => {
 
     console.log("Pagamento não aprovado, status:", status);
     return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
+
   } catch (err) {
     console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
@@ -113,28 +112,17 @@ app.post("/webhook", async (req, res) => {
 // === ROTA HORÁRIOS BLOQUEADOS ===
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
-    console.log("🔍 Buscando horários bloqueados...");
+    const gRes = await fetch(GOOGLE_SCRIPT_URL);
+    const bloqueados = await gRes.json();
 
-    const response = await fetch(GOOGLE_SCRIPT_URL);
-    const data = await response.json();
+    if (!Array.isArray(bloqueados)) throw new Error("Retorno inválido do Google Script");
 
-    if (!Array.isArray(data)) {
-      console.warn("⚠️ Retorno inesperado do Google Script:", data);
-      return res.status(200).json([]);
-    }
-
-    const bloqueados = data
-      .filter(item => item && item.diaagendado && item.horaagendada && item.status?.toLowerCase() === "aprovado")
-      .map(item => ({
-        diaagendado: item.diaagendado,
-        horaagendada: item.horaagendada,
-      }));
-
-    console.log("🔒 Horários bloqueados retornados:", bloqueados);
+    console.log("🔒 Horários bloqueados retornados:", JSON.stringify(bloqueados));
     return res.json(bloqueados);
+
   } catch (err) {
-    console.error("💥 Erro ao buscar horários bloqueados:", err);
-    return res.status(500).json({ error: err.message });
+    console.error("❌ Erro ao buscar horários bloqueados:", err);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
