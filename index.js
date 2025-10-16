@@ -32,7 +32,7 @@ app.post("/gerar-pagamento", async (req, res) => {
       ],
       payer: {
         name: nome,
-        email: `${whatsapp}@ciliosdabea.fake`, // só pra MP aceitar
+        email: `${whatsapp}@ciliosdabea.fake`,
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
@@ -80,7 +80,6 @@ app.post("/webhook", async (req, res) => {
     const status = paymentData.status;
     console.log(`🔎 Status do pagamento ${paymentId}: ${status}`);
 
-    // Só processa se estiver aprovado
     if (status === "approved") {
       console.log("✅ Pagamento aprovado! Enviando para Google Script...");
 
@@ -117,17 +116,16 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// === PEGAR HORÁRIOS BLOQUEADOS ===
+// === OBTER HORÁRIOS BLOQUEADOS ===
 app.get("/horarios", async (req, res) => {
   try {
-    const { date } = req.query; // opcional
-    const url = date ? `${GOOGLE_SCRIPT_URL}?date=${encodeURIComponent(date)}` : GOOGLE_SCRIPT_URL;
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ error: "Parâmetro 'date' é obrigatório" });
 
-    const gRes = await fetch(url);
-    const gData = await gRes.json(); // [{horaagendada:"09:00"}, ...]
+    const gsRes = await fetch(`${GOOGLE_SCRIPT_URL}?date=${encodeURIComponent(date)}`);
+    const data = await gsRes.json(); // espera array de horários ["09:00", "12:00", ...]
 
-    console.log("🕒 Horários bloqueados recebidos do Google Script:", gData);
-    return res.json(gData);
+    return res.json({ blocked: data || [] });
 
   } catch (err) {
     console.error("❌ Erro ao buscar horários bloqueados:", err);
