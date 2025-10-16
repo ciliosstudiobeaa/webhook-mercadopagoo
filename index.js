@@ -7,7 +7,6 @@ app.use(cors());
 app.use(express.json());
 
 // === VARIÁVEIS DE AMBIENTE ===
-// (defina essas no painel do Render)
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
@@ -33,7 +32,7 @@ app.post("/gerar-pagamento", async (req, res) => {
       ],
       payer: {
         name: nome,
-        email: `${whatsapp}@ciliosdabea.fake`, // apenas pra MP aceitar
+        email: `${whatsapp}@ciliosdabea.fake`,
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
@@ -117,15 +116,24 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// === ROTA ADICIONAL: HORÁRIOS OCUPADOS ===
+// === NOVA ROTA: HORÁRIOS OCUPADOS ===
 app.get("/horarios-ocupados", async (req, res) => {
   try {
-    const response = await fetch(GOOGLE_SCRIPT_URL);
-    const data = await response.json();
-    res.json(data);
+    // Pega todos os agendamentos do Google Script
+    const gRes = await fetch(GOOGLE_SCRIPT_URL);
+    const data = await gRes.json();
+
+    // Retorna apenas diaagendado e horaagendada
+    const blocked = data.map(d => ({
+      diaagendado: d.diaagendado,
+      horaagendada: d.horaagendada
+    }));
+
+    return res.json(blocked);
+
   } catch (err) {
     console.error("❌ Erro ao buscar horários ocupados:", err);
-    res.status(500).json({ ok: false, msg: "Erro ao buscar horários ocupados" });
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
