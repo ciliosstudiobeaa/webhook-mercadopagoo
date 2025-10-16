@@ -15,6 +15,24 @@ app.get("/", (req, res) => {
   res.send("Servidor ativo — integração Mercado Pago + Google Sheets rodando!");
 });
 
+// === ROTA PARA BUSCAR HORÁRIOS BLOQUEADOS ===
+app.get("/horarios-bloqueados", async (req, res) => {
+  try {
+    const gRes = await fetch(GOOGLE_SCRIPT_URL);
+    const agendamentos = await gRes.json(); // assumindo que o Google Script retorna JSON
+
+    const bloqueados = agendamentos
+      .filter(a => a.status === "Aprovado")
+      .map(a => ({ dia: a.diaagendado, hora: a.horaagendada }));
+
+    return res.status(200).json(bloqueados);
+
+  } catch (err) {
+    console.error("❌ Erro ao buscar horários bloqueados:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // === GERAR PAGAMENTO ===
 app.post("/gerar-pagamento", async (req, res) => {
   try {
@@ -113,23 +131,6 @@ app.post("/webhook", async (req, res) => {
   } catch (err) {
     console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// === OBTER HORÁRIOS BLOQUEADOS ===
-app.get("/horarios", async (req, res) => {
-  try {
-    const { date } = req.query;
-    if (!date) return res.status(400).json({ error: "Parâmetro 'date' é obrigatório" });
-
-    const gsRes = await fetch(`${GOOGLE_SCRIPT_URL}?date=${encodeURIComponent(date)}`);
-    const data = await gsRes.json(); // espera array de horários ["09:00", "12:00", ...]
-
-    return res.json({ blocked: data || [] });
-
-  } catch (err) {
-    console.error("❌ Erro ao buscar horários bloqueados:", err);
-    return res.status(500).json({ error: err.message });
   }
 });
 
