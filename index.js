@@ -7,7 +7,7 @@ app.use(cors());
 app.use(express.json());
 
 // === VARIÁVEIS DE AMBIENTE ===
-// (defina no painel do Render)
+// (defina essas no painel do Render)
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
@@ -33,11 +33,11 @@ app.post("/gerar-pagamento", async (req, res) => {
       ],
       payer: {
         name: nome,
-        email: `${whatsapp}@ciliosdabea.fake`,
+        email: `${whatsapp}@ciliosdabea.fake`, // apenas pra MP aceitar
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
-        success: "https://wa.me/+5519996293227" + whatsapp,
+        success: "https://wa.me/" + whatsapp,
         failure: "https://ciliosdabea.com.br/erro",
       },
       auto_return: "approved",
@@ -46,7 +46,7 @@ app.post("/gerar-pagamento", async (req, res) => {
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -55,7 +55,6 @@ app.post("/gerar-pagamento", async (req, res) => {
     const data = await mpRes.json();
     console.log("✅ Preferência criada:", data.id);
     return res.json({ init_point: data.init_point });
-
   } catch (err) {
     console.error("❌ Erro ao gerar pagamento:", err);
     return res.status(500).json({ error: err.message });
@@ -94,7 +93,8 @@ app.post("/webhook", async (req, res) => {
         valor30: paymentData.transaction_amount || "",
         status: "Aprovado",
         whatsapp: metadata.whatsapp || "",
-        transaction_id: paymentData.transaction_details?.transaction_id || paymentData.id || "",
+        transaction_id:
+          paymentData.transaction_details?.transaction_id || paymentData.id || "",
         reference: "MP-" + paymentId,
       };
 
@@ -111,32 +111,42 @@ app.post("/webhook", async (req, res) => {
 
     console.log("Pagamento não aprovado, status:", status);
     return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
-
   } catch (err) {
     console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// === LISTAR HORÁRIOS BLOQUEADOS ===
+// === ROTA: HORÁRIOS BLOQUEADOS ===
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
-    const gRes = await fetch(GOOGLE_SCRIPT_URL);
-    const data = await gRes.json();
+    console.log("🔍 Buscando horários bloqueados...");
 
+    const response = await fetch(GOOGLE_SCRIPT_URL);
+    const data = await response.json();
+
+    // garante que é um array
     if (!Array.isArray(data)) {
       console.warn("⚠️ Retorno inesperado do Google Script:", data);
-      return res.json([]);
+      return res.status(200).json([]);
     }
 
-    const bloqueados = data.map(a => ({
-      dia: (a.diaagendado || "").replace(/-/g, "/"),
-      hora: a.horaagendada || "",
-    }));
+    // valida estrutura
+    const bloqueados = data
+      .filter(
+        (item) =>
+          item &&
+          item.diaagendado &&
+          item.horaagendada &&
+          item.status?.toLowerCase() === "aprovado"
+      )
+      .map((item) => ({
+        diaagendado: item.diaagendado,
+        horaagendada: item.horaagendada,
+      }));
 
     console.log("🔒 Horários bloqueados retornados:", bloqueados);
     return res.json(bloqueados);
-
   } catch (err) {
     console.error("💥 Erro ao buscar horários bloqueados:", err);
     return res.status(500).json({ error: err.message });
