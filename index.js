@@ -23,9 +23,17 @@ app.post("/gerar-pagamento", async (req, res) => {
 
     const body = {
       items: [
-        { title: `Sinal de agendamento - ${servico}`, quantity: 1, currency_id: "BRL", unit_price: parseFloat(precoTotal * 0.3) }
+        {
+          title: `Sinal de agendamento - ${servico}`,
+          quantity: 1,
+          currency_id: "BRL",
+          unit_price: parseFloat(precoTotal * 0.3),
+        },
       ],
-      payer: { name: nome, email: `${whatsapp}@ciliosdabea.fake` },
+      payer: {
+        name: nome,
+        email: `${whatsapp}@ciliosdabea.fake`, // só pra MP aceitar
+      },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
         success: "https://wa.me/" + whatsapp,
@@ -36,7 +44,10 @@ app.post("/gerar-pagamento", async (req, res) => {
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
-      headers: { "Authorization": `Bearer ${MP_ACCESS_TOKEN}`, "Content-Type": "application/json" },
+      headers: {
+        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify(body),
     });
 
@@ -54,8 +65,12 @@ app.post("/gerar-pagamento", async (req, res) => {
 app.post("/webhook", async (req, res) => {
   try {
     console.log("📩 Webhook recebido:", JSON.stringify(req.body));
+
     const paymentId = req.body?.data?.id;
-    if (!paymentId) return res.status(200).json({ ok: false, msg: "Sem paymentId" });
+    if (!paymentId) {
+      console.warn("⚠️ Webhook sem paymentId");
+      return res.status(200).json({ ok: false, msg: "Sem paymentId" });
+    }
 
     const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
@@ -65,8 +80,10 @@ app.post("/webhook", async (req, res) => {
     const status = paymentData.status;
     console.log(`🔎 Status do pagamento ${paymentId}: ${status}`);
 
+    // Só processa se estiver aprovado
     if (status === "approved") {
       console.log("✅ Pagamento aprovado! Enviando para Google Script...");
+
       const metadata = paymentData.metadata || {};
       const rowData = {
         nome: metadata.nome || "Desconhecido",
@@ -85,32 +102,18 @@ app.post("/webhook", async (req, res) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rowData),
       });
+
       const gData = await gRes.text();
       console.log("📤 Retorno do Google Script:", gData);
       return res.status(200).json({ ok: true });
     }
 
+    console.log("Pagamento não aprovado, status:", status);
     return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
 
   } catch (err) {
     console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// === NOVA ROTA: HORÁRIOS OCUPADOS ===
-app.get("/horarios-ocupados", async (req, res) => {
-  try {
-    const gRes = await fetch(GOOGLE_SCRIPT_URL);
-    const data = await gRes.json();
-    if (!data.ok) return res.status(500).json({ ok: false, msg: "Erro ao buscar dados do Google Script" });
-
-    const agendados = data.agendados || {};
-    return res.status(200).json({ ok: true, agendados });
-
-  } catch (err) {
-    console.error("❌ Erro ao buscar horários ocupados:", err);
-    return res.status(500).json({ ok: false, msg: err.message });
   }
 });
 
