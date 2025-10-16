@@ -32,7 +32,7 @@ app.post("/gerar-pagamento", async (req, res) => {
       ],
       payer: {
         name: nome,
-        email: `${whatsapp}@ciliosdabea.fake`, // só pra MP aceitar
+        email: `${whatsapp}@ciliosdabea.fake`,
       },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
@@ -61,6 +61,30 @@ app.post("/gerar-pagamento", async (req, res) => {
   }
 });
 
+// === ROTA HORÁRIOS BLOQUEADOS ===
+app.get("/horarios", async (req, res) => {
+  try {
+    // Pega todos os agendamentos do Google Script
+    const gRes = await fetch(GOOGLE_SCRIPT_URL);
+    const gData = await gRes.json(); // Assumimos que o Google Script retorna JSON
+
+    // Formato de retorno: { "YYYY-MM-DD": ["09:00", "12:00"] }
+    const blocked = {};
+    gData.forEach(item => {
+      if (!item.diaagendado || !item.horaagendada) return;
+      const dia = item.diaagendado; // já no formato YYYY-MM-DD
+      if (!blocked[dia]) blocked[dia] = [];
+      blocked[dia].push(item.horaagendada);
+    });
+
+    return res.json(blocked);
+
+  } catch (err) {
+    console.error("❌ Erro ao buscar horários:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // === WEBHOOK MERCADO PAGO ===
 app.post("/webhook", async (req, res) => {
   try {
@@ -80,7 +104,6 @@ app.post("/webhook", async (req, res) => {
     const status = paymentData.status;
     console.log(`🔎 Status do pagamento ${paymentId}: ${status}`);
 
-    // Só processa se estiver aprovado
     if (status === "approved") {
       console.log("✅ Pagamento aprovado! Enviando para Google Script...");
 
@@ -97,14 +120,14 @@ app.post("/webhook", async (req, res) => {
         reference: "MP-" + paymentId,
       };
 
-      const gRes = await fetch(GOOGLE_SCRIPT_URL, {
+      const gRes2 = await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rowData),
       });
 
-      const gData = await gRes.text();
-      console.log("📤 Retorno do Google Script:", gData);
+      const gData2 = await gRes2.text();
+      console.log("📤 Retorno do Google Script:", gData2);
       return res.status(200).json({ ok: true });
     }
 
