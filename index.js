@@ -7,6 +7,7 @@ app.use(cors());
 app.use(express.json());
 
 // === VARIÁVEIS DE AMBIENTE ===
+// (defina essas no painel do Render)
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
@@ -19,6 +20,7 @@ app.get("/", (req, res) => {
 app.post("/gerar-pagamento", async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
+    console.log("📦 Dados recebidos do front:", req.body);
 
     const body = {
       items: [
@@ -29,10 +31,13 @@ app.post("/gerar-pagamento", async (req, res) => {
           unit_price: parseFloat(precoTotal * 0.3),
         },
       ],
-      payer: { name: nome, email: `${whatsapp}@ciliosdabea.fake` },
+      payer: {
+        name: nome,
+        email: `${whatsapp}@ciliosdabea.fake`, // apenas pra MP aceitar
+      },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
       back_urls: {
-        success: `https://wa.me/${whatsapp}`,
+        success: "https://wa.me/" + whatsapp,
         failure: "https://ciliosdabea.com.br/erro",
       },
       auto_return: "approved",
@@ -50,7 +55,6 @@ app.post("/gerar-pagamento", async (req, res) => {
     const data = await mpRes.json();
     console.log("✅ Preferência criada:", data.id);
     return res.json({ init_point: data.init_point });
-
   } catch (err) {
     console.error("❌ Erro ao gerar pagamento:", err);
     return res.status(500).json({ error: err.message });
@@ -63,16 +67,20 @@ app.post("/webhook", async (req, res) => {
     console.log("📩 Webhook recebido:", JSON.stringify(req.body));
 
     const paymentId = req.body?.data?.id;
-    if (!paymentId) return res.status(200).json({ ok: false, msg: "Sem paymentId" });
+    if (!paymentId) {
+      console.warn("⚠️ Webhook sem paymentId");
+      return res.status(200).json({ ok: false, msg: "Sem paymentId" });
+    }
 
     const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
     });
-
     const paymentData = await paymentRes.json();
+
     const status = paymentData.status;
     console.log(`🔎 Status do pagamento ${paymentId}: ${status}`);
 
+    // Só processa se estiver aprovado
     if (status === "approved") {
       console.log("✅ Pagamento aprovado! Enviando para Google Script...");
 
@@ -85,7 +93,8 @@ app.post("/webhook", async (req, res) => {
         valor30: paymentData.transaction_amount || "",
         status: "Aprovado",
         whatsapp: metadata.whatsapp || "",
-        transaction_id: paymentData.transaction_details?.transaction_id || paymentData.id || "",
+        transaction_id:
+          paymentData.transaction_details?.transaction_id || paymentData.id || "",
         reference: "MP-" + paymentId,
       };
 
@@ -102,27 +111,45 @@ app.post("/webhook", async (req, res) => {
 
     console.log("Pagamento não aprovado, status:", status);
     return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
-
   } catch (err) {
     console.error("❌ Erro no webhook:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// === ROTA HORÁRIOS BLOQUEADOS ===
+// === ROTA: HORÁRIOS BLOQUEADOS ===
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
-    const gRes = await fetch(GOOGLE_SCRIPT_URL);
-    const bloqueados = await gRes.json();
+    console.log("🔍 Buscando horários bloqueados...");
 
-    if (!Array.isArray(bloqueados)) throw new Error("Retorno inválido do Google Script");
+    const response = await fetch(GOOGLE_SCRIPT_URL);
+    const data = await response.json();
 
-    console.log("🔒 Horários bloqueados retornados:", JSON.stringify(bloqueados));
+    // garante que é um array
+    if (!Array.isArray(data)) {
+      console.warn("⚠️ Retorno inesperado do Google Script:", data);
+      return res.status(200).json([]);
+    }
+
+    // valida estrutura
+    const bloqueados = data
+      .filter(
+        (item) =>
+          item &&
+          item.diaagendado &&
+          item.horaagendada &&
+          item.status?.toLowerCase() === "aprovado"
+      )
+      .map((item) => ({
+        diaagendado: item.diaagendado,
+        horaagendada: item.horaagendada,
+      }));
+
+    console.log("🔒 Horários bloqueados retornados:", bloqueados);
     return res.json(bloqueados);
-
   } catch (err) {
-    console.error("❌ Erro ao buscar horários bloqueados:", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    console.error("💥 Erro ao buscar horários bloqueados:", err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
