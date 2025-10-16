@@ -6,48 +6,29 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// === VARIÁVEIS DE AMBIENTE ===
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
-// === ROTA DE TESTE ===
 app.get("/", (req, res) => {
   res.send("Servidor ativo — integração Mercado Pago + Google Sheets rodando!");
 });
 
-// === GERAR PAGAMENTO ===
 app.post("/gerar-pagamento", async (req, res) => {
   try {
     const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
     console.log("📦 Dados recebidos do front:", req.body);
 
     const body = {
-      items: [
-        {
-          title: `Sinal de agendamento - ${servico}`,
-          quantity: 1,
-          currency_id: "BRL",
-          unit_price: parseFloat(precoTotal * 0.3),
-        },
-      ],
-      payer: {
-        name: nome,
-        email: `${whatsapp}@ciliosdabea.fake`,
-      },
+      items: [{ title: `Sinal de agendamento - ${servico}`, quantity: 1, currency_id: "BRL", unit_price: parseFloat(precoTotal * 0.3) }],
+      payer: { name: nome, email: `${whatsapp}@ciliosdabea.fake` },
       metadata: { nome, whatsapp, servico, diaagendado, horaagendada },
-      back_urls: {
-        success: "https://wa.me/" + whatsapp,
-        failure: "https://ciliosdabea.com.br/erro",
-      },
+      back_urls: { success: "https://wa.me/" + whatsapp, failure: "https://ciliosdabea.com.br/erro" },
       auto_return: "approved",
     };
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${MP_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
+      headers: { "Authorization": `Bearer ${MP_ACCESS_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
 
@@ -61,26 +42,17 @@ app.post("/gerar-pagamento", async (req, res) => {
   }
 });
 
-// === WEBHOOK MERCADO PAGO ===
 app.post("/webhook", async (req, res) => {
   try {
     console.log("📩 Webhook recebido:", JSON.stringify(req.body));
 
     const paymentId = req.body?.data?.id;
-    if (!paymentId) {
-      console.warn("⚠️ Webhook sem paymentId");
-      return res.status(200).json({ ok: false, msg: "Sem paymentId" });
-    }
+    if (!paymentId) return res.status(200).json({ ok: false, msg: "Sem paymentId" });
 
-    const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
-    });
+    const paymentRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, { headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` } });
     const paymentData = await paymentRes.json();
 
-    const status = paymentData.status;
-    console.log(`🔎 Status do pagamento ${paymentId}: ${status}`);
-
-    if (status === "approved") {
+    if (paymentData.status === "approved") {
       console.log("✅ Pagamento aprovado! Enviando para Google Script...");
 
       const metadata = paymentData.metadata || {};
@@ -96,18 +68,11 @@ app.post("/webhook", async (req, res) => {
         reference: "MP-" + paymentId,
       };
 
-      const gRes = await fetch(GOOGLE_SCRIPT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(rowData),
-      });
-
-      const gData = await gRes.text();
-      console.log("📤 Retorno do Google Script:", gData);
+      const gRes = await fetch(GOOGLE_SCRIPT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(rowData) });
+      console.log("📤 Retorno do Google Script:", await gRes.text());
       return res.status(200).json({ ok: true });
     }
 
-    console.log("Pagamento não aprovado, status:", status);
     return res.status(200).json({ ok: false, msg: "Pagamento não aprovado" });
 
   } catch (err) {
@@ -116,17 +81,15 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// === HORÁRIOS BLOQUEADOS ===
+// Rota de horários bloqueados
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
     const gRes = await fetch(GOOGLE_SCRIPT_URL);
-    const text = await gRes.text();          // pega como texto
-    const data = JSON.parse(text);           // força converter para JSON
+    const text = await gRes.text();
+    const data = JSON.parse(text);
 
     const bloqueados = Array.isArray(data)
-      ? data
-          .filter(a => a.status === "Aprovado")
-          .map(a => ({ dia: a.diaagendado, hora: a.horaagendada }))
+      ? data.map(a => ({ dia: a.diaagendado, hora: a.horaagendada }))
       : [];
 
     console.log("🔒 Horários bloqueados retornados:", bloqueados);
@@ -138,6 +101,5 @@ app.get("/horarios-bloqueados", async (req, res) => {
   }
 });
 
-// === INICIALIZA SERVIDOR ===
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
