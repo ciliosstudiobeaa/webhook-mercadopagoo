@@ -6,34 +6,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// === VARIÁVEIS DE AMBIENTE ===
-const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
-
-// === ROTA PARA HORÁRIOS BLOQUEADOS ===
-app.get("/horarios-bloqueados", async (req, res) => {
-  try {
-    const response = await fetch(GOOGLE_SCRIPT_URL);
-    const data = await response.json(); // retorna [{diaagendado, horaagendada, status}]
-    // retorna apenas os horários aprovados
-    const approved = data.filter(x => x.status === "Aprovado");
-    res.json(approved);
-  } catch (e) {
-    console.error("Erro ao buscar horários:", e);
-    res.status(500).json({ error: "Erro ao buscar horários" });
-  }
-});
+const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 
 // === ROTA PARA GERAR PAGAMENTO ===
 app.post("/gerar-pagamento", async (req, res) => {
-  const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
-
-  if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
-    return res.status(400).json({ error: "Campos obrigatórios faltando" });
-  }
-
   try {
-    // Gerar pagamento no Mercado Pago
+    console.log("📦 [REQ] Dados recebidos para gerar pagamento:", req.body);
+    const data = req.body;
+
+    // Corrige a data para DD/MM/YYYY
+    const [year, month, day] = data.diaagendado.split('-');
+    const diaCorrigido = `${day}/${month}/${year}`;
+
+    // Cria preferência real no Mercado Pago
+    console.log("💰 Criando preferência no Mercado Pago...");
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
@@ -43,77 +30,67 @@ app.post("/gerar-pagamento", async (req, res) => {
       body: JSON.stringify({
         items: [
           {
-            title: servico,
+            title: data.servico,
             quantity: 1,
-            unit_price: parseFloat(precoTotal),
+            unit_price: data.precoTotal,
           },
         ],
-        back_urls: {
-          success: "https://seusite.com/sucesso", // URL qualquer que seja válida
-          pending: "",
-          failure: "",
+        metadata: {
+          servico: data.servico,
+          diaagendado: diaCorrigido,
+          horaagendada: data.horaagendada,
+          nome: data.nome,
+          whatsapp: data.whatsapp
         },
-        auto_return: "approved",
-        external_reference: JSON.stringify({ nome, diaagendado, horaagendada, whatsapp }),
+        back_urls: { success: "", failure: "", pending: "" },
       }),
     });
 
-    const mpJson = await mpRes.json();
+    const prefJson = await mpRes.json();
+    console.log("📄 [MP] Preferência gerada:", prefJson);
 
-    if (!mpJson.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
+    if (!prefJson.init_point) throw new Error("Erro ao gerar checkout MP");
 
-    res.json({ init_point: mpJson.init_point });
-  } catch (e) {
-    console.error("Erro ao gerar pagamento:", e);
-    res.status(500).json({ error: "Erro interno" });
-  }
-});
-
-// === ROTA DE WEBHOOK PARA PAGAMENTO APROVADO ===
-app.post("/webhook", async (req, res) => {
-  try {
-    const { type, data } = req.body;
-
-    if (type === "payment") {
-      const paymentId = data.id;
-
-      // Busca o pagamento no Mercado Pago
-      const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-        headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
-      });
-      const mpData = await mpRes.json();
-
-      if (mpData.status === "approved") {
-        // Pega o nome do frontend via external_reference
-        let externalRef = {};
-        try { externalRef = JSON.parse(mpData.external_reference); } catch {}
-
-        // Nome garantido
-        const nome = externalRef.nome || mpData.additional_info?.payer?.first_name || "";
-
-        await fetch(GOOGLE_SCRIPT_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            nome,
-            whatsapp: externalRef.whatsapp || "",
-            servico: mpData.description || "",
-            precoTotal: mpData.transaction_amount || 0,
-            diaagendado: externalRef.diaagendado || "",
-            horaagendada: externalRef.horaagendada || "",
-            status: "Aprovado",
-          }),
-        });
-      }
-    }
-
-    res.sendStatus(200);
+    // Retorna init_point e paymentId pro front
+    return res.json({ init_point: prefJson.init_point, paymentId: prefJson.id });
   } catch (err) {
-    console.error("Erro webhook MP:", err);
-    res.sendStatus(500);
+    console.error("❌ ERRO EM /gerar-pagamento:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// === START SERVER ===
+// === ROTA PARA BUSCAR HORÁRIOS BLOQUEADOS ===
+app.get("/horarios-bloqueados", async (req, res) => {
+  try {
+    console.log("🔍 Buscando horários bloqueados no Google Script...");
+    const gsRes = await fetch(GOOGLE_SCRIPT_URL, { method: "GET" });
+
+    console.log("📡 [RES] Status do Google Script:", gsRes.status);
+    const data = await gsRes.json().catch(() => []);
+    console.log("📅 [RES] Horários recebidos:", data);
+
+    res.json(data);
+  } catch (err) {
+    console.error("❌ ERRO EM /horarios-bloqueados:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// === ROTA PARA CHECAR PAGAMENTO PELO PAYMENT ID ===
+app.get("/check-payment/:id", async (req, res) => {
+  try {
+    const mpId = req.params.id;
+    const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${mpId}`, {
+      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
+    });
+    const mpJson = await mpRes.json();
+    res.json({ status: mpJson.status });
+  } catch (err) {
+    console.error("❌ ERRO EM /check-payment/:id:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// === SERVIDOR ONLINE ===
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
