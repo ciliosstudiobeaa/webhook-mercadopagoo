@@ -15,11 +15,12 @@ app.post("/gerar-pagamento", async (req, res) => {
     console.log("📦 [REQ] Dados recebidos para gerar pagamento:", req.body);
     const data = req.body;
 
-    // Corrige a data para DD/MM/YYYY
-    const [year, month, day] = data.diaagendado.split('-');
-    const diaCorrigido = `${day}/${month}/${year}`;
+    // Corrige a data para o formato DD/MM/YYYY
+    const [year, month, day] = data.diaagendado.split("-");
+    const diaagendado = `${day}/${month}/${year}`;
+    data.diaagendado = diaagendado;
 
-    // Cria preferência real no Mercado Pago
+    // Cria preferência no Mercado Pago
     console.log("💰 Criando preferência no Mercado Pago...");
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
@@ -36,26 +37,67 @@ app.post("/gerar-pagamento", async (req, res) => {
           },
         ],
         metadata: {
-          servico: data.servico,
-          diaagendado: diaCorrigido,
-          horaagendada: data.horaagendada,
           nome: data.nome,
-          whatsapp: data.whatsapp
+          whatsapp: data.whatsapp,
+          servico: data.servico,
+          diaagendado: data.diaagendado,
+          horaagendada: data.horaagendada
         },
         back_urls: { success: "", failure: "", pending: "" },
+        notification_url: `${process.env.BACKEND_URL}/webhook-mercadopago`
       }),
     });
 
     const prefJson = await mpRes.json();
-    console.log("📄 [MP] Preferência gerada:", prefJson);
+    if(!prefJson.init_point) throw new Error("Erro ao gerar checkout MP");
 
-    if (!prefJson.init_point) throw new Error("Erro ao gerar checkout MP");
-
-    // Retorna init_point e paymentId pro front
-    return res.json({ init_point: prefJson.init_point, paymentId: prefJson.id });
+    console.log("✅ Checkout gerado com sucesso:", prefJson.init_point);
+    res.json({ init_point: prefJson.init_point });
   } catch (err) {
     console.error("❌ ERRO EM /gerar-pagamento:", err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// === WEBHOOK MERCADO PAGO ===
+app.post("/webhook-mercadopago", async (req, res) => {
+  try {
+    console.log("📢 [Webhook] Recebido evento:", req.body);
+
+    const payment = req.body.data?.id ? await fetch(`https://api.mercadopago.com/v1/payments/${req.body.data.id}`, {
+      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` }
+    }).then(r => r.json()) : null;
+
+    if(payment && payment.status === "approved"){
+      console.log("✅ Pagamento aprovado, enviando para Google Script...");
+
+      const data = {
+        nome: payment.metadata.nome,
+        whatsapp: payment.metadata.whatsapp,
+        servico: payment.metadata.servico,
+        diaagendado: payment.metadata.diaagendado,
+        horaagendada: payment.metadata.horaagendada,
+        status: "Aprovado",
+        pago: true
+      };
+
+      const gsRes = await fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+      });
+
+      const gsJson = await gsRes.json().catch(() => ({}));
+      console.log("📄 [GS] Retorno:", gsJson);
+
+      res.status(200).send("OK");
+    } else {
+      console.log("ℹ️ Pagamento ainda não aprovado");
+      res.status(200).send("Evento ignorado");
+    }
+  } catch(e) {
+    console.error("❌ ERRO WEBHOOK:", e);
+    res.status(500).send("Erro");
   }
 });
 
@@ -64,29 +106,10 @@ app.get("/horarios-bloqueados", async (req, res) => {
   try {
     console.log("🔍 Buscando horários bloqueados no Google Script...");
     const gsRes = await fetch(GOOGLE_SCRIPT_URL, { method: "GET" });
-
-    console.log("📡 [RES] Status do Google Script:", gsRes.status);
     const data = await gsRes.json().catch(() => []);
-    console.log("📅 [RES] Horários recebidos:", data);
-
     res.json(data);
   } catch (err) {
     console.error("❌ ERRO EM /horarios-bloqueados:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// === ROTA PARA CHECAR PAGAMENTO PELO PAYMENT ID ===
-app.get("/check-payment/:id", async (req, res) => {
-  try {
-    const mpId = req.params.id;
-    const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${mpId}`, {
-      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
-    });
-    const mpJson = await mpRes.json();
-    res.json({ status: mpJson.status });
-  } catch (err) {
-    console.error("❌ ERRO EM /check-payment/:id:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
