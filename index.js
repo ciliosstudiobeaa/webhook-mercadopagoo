@@ -68,7 +68,7 @@ app.post("/gerar-pagamento", async (req, res) => {
 });
 
 // === ROTA DE WEBHOOK PARA PAGAMENTO APROVADO ===
-app.post("/webhook-mp", async (req, res) => {
+app.post("/webhook", async (req, res) => {
   try {
     const { type, data } = req.body;
 
