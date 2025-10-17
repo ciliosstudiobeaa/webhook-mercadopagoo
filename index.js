@@ -15,21 +15,7 @@ app.post("/gerar-pagamento", async (req, res) => {
     console.log("📦 [REQ] Dados recebidos para gerar pagamento:", req.body);
     const data = req.body;
 
-    // Envia direto para a planilha apenas status Aprovado
-    console.log("🚀 Enviando dados aprovados para o Google Script...");
-    const gsRes = await fetch(GOOGLE_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...data, status: "Aprovado" }),
-    });
-
-    const gsJson = await gsRes.json().catch(() => ({}));
-    console.log("📄 [RES] Retorno do Google Script:", gsJson);
-
-    if (!gsJson.ok && !gsJson.success) {
-      throw new Error(gsJson.msg || "Erro ao enviar dados ao Google Script");
-    }
-
+    // ❌ Removido envio direto para a planilha
     // Cria preferência real no Mercado Pago
     console.log("💰 Criando preferência no Mercado Pago...");
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
@@ -65,6 +51,43 @@ app.post("/gerar-pagamento", async (req, res) => {
   } catch (err) {
     console.error("❌ ERRO EM /gerar-pagamento:", err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// === ROTA DO WEBHOOK MERCADO PAGO ===
+app.post("/mp-webhook", async (req, res) => {
+  try {
+    const { id, topic } = req.body;
+    console.log("📬 [Webhook] Recebido:", req.body);
+
+    if (topic === "payment") {
+      // Busca o pagamento no MP
+      const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${id}`, {
+        headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
+      });
+      const payment = await mpRes.json();
+
+      console.log("💳 [MP] Dados do pagamento:", payment);
+
+      if (payment.status === "approved") {
+        console.log("✅ Pagamento aprovado! Enviando para a planilha...");
+        await fetch(GOOGLE_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            servico: payment.metadata.servico,
+            diaagendado: payment.metadata.diaagendado,
+            horaagendada: payment.metadata.horaagendada,
+            status: "Aprovado",
+          }),
+        });
+      }
+    }
+
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("❌ ERRO EM /mp-webhook:", err.message);
+    res.status(500).send("Erro");
   }
 });
 
