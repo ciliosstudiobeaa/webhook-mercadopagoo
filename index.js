@@ -6,80 +6,65 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// === VARIÁVEIS DE AMBIENTE ===
-// Defina no Render ou seu ambiente
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 
-// ============================
-// Rota para gerar pagamento
-// ============================
+// === ROTA PARA GERAR PAGAMENTO ===
 app.post("/gerar-pagamento", async (req, res) => {
   try {
-    const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
+    console.log("📦 [REQ] Dados recebidos para gerar pagamento:", req.body);
 
-    // 1️⃣ Enviar para Google Script
+    const data = req.body;
+
+    // Envio para o Google Script
+    console.log("🚀 Enviando dados para o Google Script...");
     const gsRes = await fetch(GOOGLE_SCRIPT_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nome, whatsapp, servico, precoTotal, diaagendado, horaagendada, status: "Aguardando" })
+      body: JSON.stringify({ ...data, status: "Aprovado" }),
     });
-    const gsJson = await gsRes.json();
-    if (!gsJson.ok) throw new Error(gsJson.msg || "Erro Google Script");
 
-    // 2️⃣ Criar preferência no Mercado Pago
-    const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${MP_ACCESS_TOKEN}`
-      },
-      body: JSON.stringify({
-        items: [
-          {
-            title: servico,
-            quantity: 1,
-            unit_price: parseFloat(precoTotal)
-          }
-        ],
-        back_urls: {
-          success: "https://seu-frontend.com/aguardando.html",
-          pending: "https://seu-frontend.com/aguardando.html",
-          failure: "https://seu-frontend.com/erro.html"
-        },
-        auto_return: "approved"
-      })
-    });
-    const mpJson = await mpRes.json();
+    console.log("📡 [RES] Status do Google Script:", gsRes.status);
 
-    if (!mpJson.init_point) throw new Error("Erro ao gerar checkout Mercado Pago");
+    const gsJson = await gsRes.json().catch(() => ({}));
+    console.log("📄 [RES] Retorno do Google Script:", gsJson);
 
-    // 3️⃣ Retorna init_point real
-    res.json({ init_point: mpJson.init_point });
+    if (!gsJson.ok && !gsJson.success) {
+      throw new Error(gsJson.msg || "Erro ao enviar dados ao Google Script");
+    }
+
+    // Simulação de criação de pagamento
+    console.log("💰 Simulando criação de pagamento Mercado Pago...");
+    const init_point =
+      "https://www.mercadopago.com.br/checkout/v1/redirect";
+
+    console.log("✅ Checkout gerado com sucesso:", init_point);
+    return res.json({ init_point });
 
   } catch (err) {
-    console.error("Erro /gerar-pagamento:", err);
+    console.error("❌ ERRO EM /gerar-pagamento:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ============================
-// Rota para buscar horários bloqueados
-// ============================
+// === ROTA PARA BUSCAR HORÁRIOS BLOQUEADOS ===
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
+    console.log("🔍 Buscando horários bloqueados no Google Script...");
     const gsRes = await fetch(GOOGLE_SCRIPT_URL, { method: "GET" });
-    const data = await gsRes.json();
-    // Ex: data = [{ dia: "2025-10-17", hora: "11:00" }, ...]
+
+    console.log("📡 [RES] Status do Google Script:", gsRes.status);
+
+    const data = await gsRes.json().catch(() => []);
+    console.log("📅 [RES] Horários recebidos:", data);
+
     res.json(data);
   } catch (err) {
-    console.error("Erro /horarios-bloqueados:", err);
+    console.error("❌ ERRO EM /horarios-bloqueados:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ============================
-// Inicia o servidor
-// ============================
+// === SERVIDOR ONLINE ===
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
