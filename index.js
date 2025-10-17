@@ -60,7 +60,7 @@ app.post("/gerar-pagamento", async (req, res) => {
 });
 
 // === WEBHOOK MERCADO PAGO ===
-app.post("/webhook-mercadopago", async (req, res) => {
+app.post("/webhook", async (req, res) => {
   try {
     console.log("📢 [Webhook] Recebido evento:", req.body);
 
