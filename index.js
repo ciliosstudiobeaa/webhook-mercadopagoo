@@ -32,10 +32,7 @@ app.post("/gerar-pagamento", async (req, res) => {
   }
 
   try {
-    // === Log de debug ===
-    console.log("🔹 Dados recebidos para pagamento:", { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada });
-
-    // Gerar pagamento no Mercado Pago
+    // === Corrigido: back_urls válidas para evitar erro auto_return ===
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
@@ -44,23 +41,20 @@ app.post("/gerar-pagamento", async (req, res) => {
       },
       body: JSON.stringify({
         items: [
-          {
-            title: servico,
-            quantity: 1,
-            unit_price: parseFloat(precoTotal),
-          },
+          { title: servico, quantity: 1, unit_price: parseFloat(precoTotal) },
         ],
-        back_urls: { success: "www.ciliosdabea.com/failure", pending: "www.ciliosdabea.com/failure", failure: "www.ciliosdabea.com/failure" },
+        back_urls: {
+          success: "https://seusite.com/sucesso",
+          pending: "https://seusite.com/pendente",
+          failure: "https://seusite.com/falha"
+        },
         auto_return: "approved",
         external_reference: JSON.stringify({ diaagendado, horaagendada, whatsapp }),
-        description: servico, // garante que o MP tem a descrição
+        description: servico
       }),
     });
 
     const mpJson = await mpRes.json();
-
-    // === Log de resposta do MP ===
-    console.log("🔹 Resposta do Mercado Pago:", mpJson);
 
     if (!mpJson.init_point) {
       return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
@@ -87,9 +81,8 @@ app.post("/webhook-mp", async (req, res) => {
       });
       const mpData = await mpRes.json();
 
-      console.log("🔹 Dados do pagamento via webhook:", mpData);
-
       if (mpData.status === "approved") {
+        // Atualiza a planilha apenas se aprovado
         let externalRef = {};
         try { externalRef = JSON.parse(mpData.external_reference); } catch {}
         await fetch(GOOGLE_SCRIPT_URL, {
