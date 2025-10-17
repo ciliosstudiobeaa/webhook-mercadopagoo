@@ -1,8 +1,7 @@
-// webhook.js (arquivo independente)
-// Para usar: no seu index principal -> const webhook = require('./webhook'); app.use('/', webhook);
+// webhook.js (ES Module)
+import express from "express";
+import fetch from "node-fetch";
 
-const express = require('express');
-const fetch = require('node-fetch');
 const router = express.Router();
 
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
@@ -11,8 +10,8 @@ const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 // Função para garantir que a data fique no formato correto DD/MM/YYYY
 function formatDate(dateStr) {
   const d = new Date(dateStr);
-  const day = String(d.getDate()).padStart(2, '0');
-  const month = String(d.getMonth() + 1).padStart(2, '0'); // Meses começam do 0
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = String(d.getMonth() + 1).padStart(2, "0"); // Meses começam do 0
   const year = d.getFullYear();
   return `${day}/${month}/${year}`;
 }
@@ -32,12 +31,11 @@ router.post("/webhook", async (req, res) => {
       if (payment.status === "approved") {
         console.log("✅ Pagamento aprovado! Enviando para a planilha...");
 
-        // Corrige a data antes de enviar
         const diaFormatado = payment.metadata?.diaagendado
           ? formatDate(payment.metadata.diaagendado)
           : "";
 
-        await fetch(GOOGLE_SCRIPT_URL, {
+        const gsRes = await fetch(GOOGLE_SCRIPT_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -47,6 +45,9 @@ router.post("/webhook", async (req, res) => {
             status: "Aprovado",
           }),
         });
+
+        const gsJson = await gsRes.json().catch(() => ({}));
+        console.log("📄 [Planilha] Retorno:", gsJson);
       }
     }
 
@@ -57,4 +58,4 @@ router.post("/webhook", async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;
