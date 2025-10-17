@@ -106,11 +106,11 @@ app.post("/webhook", async (req, res) => {
         const horaagendada = externalRef.horaagendada || "";
         const status = "Aprovado";
 
-        // Envia para o Google Script (form-urlencoded)
+        // Envia para o Google Script (JSON)
         const gsRes = await fetch(GOOGLE_SCRIPT_URL, {
           method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
             nome,
             whatsapp,
             servico,
