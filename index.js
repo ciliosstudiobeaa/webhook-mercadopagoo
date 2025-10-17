@@ -49,12 +49,12 @@ app.post("/gerar-pagamento", async (req, res) => {
           },
         ],
         back_urls: {
-          success: "https://seusite.com/sucesso", // URL válida
+          success: "https://seusite.com/sucesso", // apenas precisa ser uma URL válida
           pending: "",
           failure: "",
         },
         auto_return: "approved",
-        external_reference: JSON.stringify({ nome, diaagendado, horaagendada, whatsapp }),
+        external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal, diaagendado, horaagendada }),
       }),
     });
 
@@ -71,67 +71,66 @@ app.post("/gerar-pagamento", async (req, res) => {
 
 // === ROTA DE WEBHOOK PARA PAGAMENTO APROVADO ===
 app.post("/webhook", async (req, res) => {
-  console.log("Recebido webhook MP:", JSON.stringify(req.body));
-
   try {
+    console.log("Recebido webhook MP:", JSON.stringify(req.body));
+
     const { type, data } = req.body;
 
-    if (type === "payment" && data && data.id) {
-      const paymentId = data.id;
-      console.log("ID do pagamento recebido:", paymentId);
-
-      // Busca o pagamento no Mercado Pago
-      const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-        headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
-      });
-      const mpData = await mpRes.json();
-      console.log("Dados do pagamento MP:", mpData);
-
-      if (mpData.status === "approved") {
-        // Parse seguro do external_reference
-        let externalRef = {};
-        if (mpData.external_reference) {
-          try {
-            externalRef = JSON.parse(mpData.external_reference);
-          } catch (err) {
-            console.log("Erro ao parsear external_reference:", err);
-          }
-        }
-
-        const nome = externalRef.nome || mpData.additional_info?.payer?.first_name || "";
-        const whatsapp = externalRef.whatsapp || "";
-        const servico = mpData.description || "";
-        const precoTotal = mpData.transaction_amount || 0;
-        const diaagendado = externalRef.diaagendado || "";
-        const horaagendada = externalRef.horaagendada || "";
-        const status = "Aprovado";
-
-        // Envia para o Google Script (JSON)
-        const gsRes = await fetch(GOOGLE_SCRIPT_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            nome,
-            whatsapp,
-            servico,
-            precoTotal,
-            diaagendado,
-            horaagendada,
-            status,
-          }),
-        });
-
-        const gsText = await gsRes.text();
-        console.log("Resposta Google Script:", gsRes.status, gsText);
-      }
-    } else {
-      console.log("Webhook ignorado, type ou data.id inválido");
+    if (type !== "payment" || !data?.id) {
+      return res.status(400).json({ ok: false, msg: "Evento inválido" });
     }
 
-    res.sendStatus(200);
+    // Busca o pagamento no Mercado Pago
+    const mpResp = await fetch(`https://api.mercadopago.com/v1/payments/${data.id}`, {
+      headers: {
+        Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
+      },
+    });
+
+    const mpData = await mpResp.json();
+    console.log("Pagamento recebido do MP:", mpData);
+
+    if (mpData.status !== "approved") {
+      console.log("Pagamento não aprovado, ignorando.");
+      return res.json({ ok: true });
+    }
+
+    // Pega os dados originais do front
+    const externalRef = JSON.parse(mpData.external_reference || "{}");
+    const { nome, whatsapp, diaagendado, horaagendada, servico, precoTotal } = externalRef;
+
+    // --- Corrige a data antes de enviar ---
+    function formatarDataBR(dataISO) {
+      if (!dataISO) return "";
+      const partes = dataISO.split("-");
+      if (partes.length !== 3) return dataISO;
+      return `${partes[2]}/${partes[1]}/${partes[0]}`;
+    }
+
+    const diaagendadoFormatado = formatarDataBR(diaagendado);
+
+    // Envia pro Google Script
+    const scriptResponse = await fetch(GOOGLE_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        nome,
+        whatsapp,
+        servico,
+        precoTotal,
+        diaagendado: diaagendadoFormatado,
+        horaagendada,
+        status: "Aprovado",
+      }),
+    });
+
+    const scriptData = await scriptResponse.text();
+    console.log("Resposta Google Script:", scriptResponse.status, scriptData);
+
+    res.json({ ok: true });
   } catch (err) {
-    console.error("Erro webhook MP:", err);
-    res.sendStatus(500);
+    console.error("Erro no webhook:", err);
+    res.status(500).json({ ok: false, msg: err.message });
   }
 });
 
