@@ -27,17 +27,13 @@ app.get("/horarios-bloqueados", async (req, res) => {
 app.post("/gerar-pagamento", async (req, res) => {
   const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
-  if (!nome || !whatsapp || !servico || !Valor 30% || !diaagendado || !horaagendada) {
+  if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
     return res.status(400).json({ error: "Campos obrigatórios faltando" });
   }
 
   try {
-    // Garante que o preço seja número
-    const precoLimpo = parseFloat(
-      String(precoTotal).replace(/[^\d.,]/g, "").replace(",", ".")
-    );
+    const precoLimpo = parseFloat(String(precoTotal).replace(/[^\d.,]/g, "").replace(",", "."));
 
-    // Gerar pagamento no Mercado Pago
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
@@ -57,20 +53,12 @@ app.post("/gerar-pagamento", async (req, res) => {
           pending: "",
           failure: "",
         },
-        auto_return: "Aprroved",
-        external_reference: JSON.stringify({
-          nome,
-          whatsapp,
-          servico,
-          precoTotal: precoLimpo,
-          diaagendado,
-          horaagendada,
-        }),
+        auto_return: "approved",
+        external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
       }),
     });
 
     const mpJson = await mpRes.json();
-
     if (!mpJson.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
 
     res.json({ init_point: mpJson.init_point });
@@ -83,67 +71,60 @@ app.post("/gerar-pagamento", async (req, res) => {
 // === ROTA DE WEBHOOK PARA PAGAMENTO APROVADO ===
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("Recebido webhook MP:", JSON.stringify(req.body));
-
     const { type, data } = req.body;
 
-    if (type !== "payment" || !data?.id) {
-      return res.status(400).json({ ok: false, msg: "Evento inválido" });
+    if (type === "payment") {
+      const paymentId = data.id;
+
+      const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+        headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
+      });
+      const mpData = await mpRes.json();
+
+      if (mpData.status === "approved") {
+        function formatarDataBR(dataISO) {
+          if (!dataISO) return "";
+          const partes = dataISO.split("-");
+          if (partes.length !== 3) return dataISO;
+          return `${partes[2]}/${partes[1]}/${partes[0]}`;
+        }
+
+        let externalRef = {};
+        try { externalRef = JSON.parse(mpData.external_reference); } catch {}
+
+        const nome = externalRef.nome || "";
+        const whatsapp = externalRef.whatsapp || "";
+        const servico = externalRef.servico || mpData.description || "";
+        const diaagendado = formatarDataBR(externalRef.diaagendado || "");
+        const horaagendada = externalRef.horaagendada || "";
+        const status = "Aprovado";
+
+        const valor30 = mpData.transaction_amount || 0;
+        const transaction_id = mpData.transaction_details?.transaction_id || "";
+        const reference = paymentId || "";
+
+        await fetch(GOOGLE_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nome,
+            whatsapp,
+            servico,
+            diaagendado,
+            horaagendada,
+            status,
+            "Valor 30%": valor30,
+            transaction_id,
+            reference,
+          }),
+        });
+      }
     }
 
-    const mpResp = await fetch(`https://api.mercadopago.com/v1/payments/${data.id}`, {
-      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
-    });
-
-    const mpData = await mpResp.json();
-    console.log("Pagamento recebido do MP:", mpData);
-
-    if (mpData.status !== "approved") {
-      console.log("Pagamento não aprovado, ignorando.");
-      return res.json({ ok: true });
-    }
-
-    const externalRef = JSON.parse(mpData.external_reference || "{}");
-    const { nome, whatsapp, diaagendado, horaagendada, servico } = externalRef;
-    let { precoTotal } = externalRef;
-
-    precoTotal = parseFloat(String(precoTotal).replace(/[^\d.,]/g, "").replace(",", "."));
-    const transaction_id = mpData.transaction_details?.transaction_id || mpData.id || "";
-    const reference = mpData.external_reference || "";
-
-    // Corrige data para formato BR
-    function formatarDataBR(dataISO) {
-      if (!dataISO) return "";
-      const partes = dataISO.split("-");
-      if (partes.length !== 3) return dataISO;
-      return `${partes[2]}/${partes[1]}/${partes[0]}`;
-    }
-    const diaagendadoFormatado = formatarDataBR(diaagendado);
-
-    // Envia pro Google Script (com nome da coluna exato)
-    const scriptResponse = await fetch(GOOGLE_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        nome,
-        whatsapp,
-        servico,
-        "valor 30%": precoTotal,
-        diaagendado: diaagendadoFormatado,
-        horaagendada,
-        status: "Aprovado",
-        transaction_id,
-        reference,
-      }),
-    });
-
-    const scriptData = await scriptResponse.text();
-    console.log("Resposta Google Script:", scriptResponse.status, scriptData);
-
-    res.json({ ok: true });
+    res.sendStatus(200);
   } catch (err) {
-    console.error("Erro no webhook:", err);
-    res.status(500).json({ ok: false, msg: err.message });
+    console.error("Erro webhook MP:", err);
+    res.sendStatus(500);
   }
 });
 
