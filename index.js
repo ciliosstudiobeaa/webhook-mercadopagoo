@@ -55,7 +55,7 @@ app.post("/gerar-pagamento", async (req, res) => {
 });
 
 // === ROTA DO WEBHOOK MERCADO PAGO ===
-app.post("/mp-webhook", async (req, res) => {
+app.post("/webhook", async (req, res) => {
   try {
     const { id, topic } = req.body;
     console.log("📬 [Webhook] Recebido:", req.body);
