@@ -10,11 +10,30 @@ app.use(express.json());
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
+// === FUNÇÃO PARA LIMPAR E CONVERTER VALOR EM NÚMERO ===
+function limparValor(valor) {
+  if (!valor) return 0;
+  // Remove tudo que não seja número ou vírgula/ponto
+  let num = String(valor).replace(/[^\d.,]/g, "");
+  // Substitui vírgula por ponto
+  num = num.replace(",", ".");
+  const parsed = parseFloat(num);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+// === FUNÇÃO PARA FORMATAR DATA BR ===
+function formatarDataBR(dataISO) {
+  if (!dataISO) return "";
+  const partes = dataISO.split("-");
+  if (partes.length !== 3) return dataISO;
+  return `${partes[2]}/${partes[1]}/${partes[0]}`;
+}
+
 // === ROTA PARA HORÁRIOS BLOQUEADOS ===
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
     const response = await fetch(GOOGLE_SCRIPT_URL);
-    const data = await response.json(); // retorna [{diaagendado, horaagendada, status}]
+    const data = await response.json();
     const approved = data.filter(x => x.status === "Aprovado");
     res.json(approved);
   } catch (e) {
@@ -32,7 +51,7 @@ app.post("/gerar-pagamento", async (req, res) => {
   }
 
   try {
-    const precoLimpo = parseFloat(String(precoTotal).replace(/[^\d.,]/g, "").replace(",", "."));
+    const precoLimpo = limparValor(precoTotal);
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
@@ -82,13 +101,6 @@ app.post("/webhook", async (req, res) => {
       const mpData = await mpRes.json();
 
       if (mpData.status === "approved") {
-        function formatarDataBR(dataISO) {
-          if (!dataISO) return "";
-          const partes = dataISO.split("-");
-          if (partes.length !== 3) return dataISO;
-          return `${partes[2]}/${partes[1]}/${partes[0]}`;
-        }
-
         let externalRef = {};
         try { externalRef = JSON.parse(mpData.external_reference); } catch {}
 
@@ -99,7 +111,10 @@ app.post("/webhook", async (req, res) => {
         const horaagendada = externalRef.horaagendada || "";
         const status = "Aprovado";
 
-        const valor30 = mpData.transaction_amount || 0;
+        // valor limpo
+        const valor30 = limparValor(mpData.transaction_amount || externalRef.precoTotal);
+
+        // transaction_id e reference
         const transaction_id = mpData.transaction_details?.transaction_id || "";
         const reference = paymentId || "";
 
