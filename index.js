@@ -49,7 +49,7 @@ app.post("/gerar-pagamento", async (req, res) => {
           },
         ],
         back_urls: {
-          success: "https://seusite.com/sucesso", // URL qualquer que seja válida
+          success: "https://seusite.com/sucesso", // URL válida
           pending: "",
           failure: "",
         },
@@ -71,40 +71,61 @@ app.post("/gerar-pagamento", async (req, res) => {
 
 // === ROTA DE WEBHOOK PARA PAGAMENTO APROVADO ===
 app.post("/webhook", async (req, res) => {
+  console.log("Recebido webhook MP:", JSON.stringify(req.body));
+
   try {
     const { type, data } = req.body;
 
-    if (type === "payment") {
+    if (type === "payment" && data && data.id) {
       const paymentId = data.id;
+      console.log("ID do pagamento recebido:", paymentId);
 
       // Busca o pagamento no Mercado Pago
       const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
         headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
       });
       const mpData = await mpRes.json();
+      console.log("Dados do pagamento MP:", mpData);
 
       if (mpData.status === "approved") {
-        // Pega o nome do frontend via external_reference
+        // Parse seguro do external_reference
         let externalRef = {};
-        try { externalRef = JSON.parse(mpData.external_reference); } catch {}
+        if (mpData.external_reference) {
+          try {
+            externalRef = JSON.parse(mpData.external_reference);
+          } catch (err) {
+            console.log("Erro ao parsear external_reference:", err);
+          }
+        }
 
-        // Nome garantido
         const nome = externalRef.nome || mpData.additional_info?.payer?.first_name || "";
+        const whatsapp = externalRef.whatsapp || "";
+        const servico = mpData.description || "";
+        const precoTotal = mpData.transaction_amount || 0;
+        const diaagendado = externalRef.diaagendado || "";
+        const horaagendada = externalRef.horaagendada || "";
+        const status = "Aprovado";
 
-        await fetch(GOOGLE_SCRIPT_URL, {
+        // Envia para o Google Script (form-urlencoded)
+        const gsRes = await fetch(GOOGLE_SCRIPT_URL, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
             nome,
-            whatsapp: externalRef.whatsapp || "",
-            servico: mpData.description || "",
-            precoTotal: mpData.transaction_amount || 0,
-            diaagendado: externalRef.diaagendado || "",
-            horaagendada: externalRef.horaagendada || "",
-            status: "Aprovado",
+            whatsapp,
+            servico,
+            precoTotal,
+            diaagendado,
+            horaagendada,
+            status,
           }),
         });
+
+        const gsText = await gsRes.text();
+        console.log("Resposta Google Script:", gsRes.status, gsText);
       }
+    } else {
+      console.log("Webhook ignorado, type ou data.id inválido");
     }
 
     res.sendStatus(200);
