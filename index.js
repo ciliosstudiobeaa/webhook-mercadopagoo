@@ -15,7 +15,6 @@ app.get("/horarios-bloqueados", async (req, res) => {
   try {
     const response = await fetch(GOOGLE_SCRIPT_URL);
     const data = await response.json(); // retorna [{diaagendado, horaagendada, status}]
-    // retorna apenas os horários aprovados
     const approved = data.filter(x => x.status === "Aprovado");
     res.json(approved);
   } catch (e) {
@@ -33,6 +32,11 @@ app.post("/gerar-pagamento", async (req, res) => {
   }
 
   try {
+    // Garante que o preço seja número
+    const precoLimpo = parseFloat(
+      String(precoTotal).replace(/[^\d.,]/g, "").replace(",", ".")
+    );
+
     // Gerar pagamento no Mercado Pago
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
@@ -45,16 +49,23 @@ app.post("/gerar-pagamento", async (req, res) => {
           {
             title: servico,
             quantity: 1,
-            unit_price: parseFloat(precoTotal),
+            unit_price: precoLimpo,
           },
         ],
         back_urls: {
-          success: "https://seusite.com/sucesso", // apenas precisa ser uma URL válida
+          success: "https://seusite.com/sucesso",
           pending: "",
           failure: "",
         },
         auto_return: "approved",
-        external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal, diaagendado, horaagendada }),
+        external_reference: JSON.stringify({
+          nome,
+          whatsapp,
+          servico,
+          precoTotal: precoLimpo,
+          diaagendado,
+          horaagendada,
+        }),
       }),
     });
 
@@ -80,11 +91,8 @@ app.post("/webhook", async (req, res) => {
       return res.status(400).json({ ok: false, msg: "Evento inválido" });
     }
 
-    // Busca o pagamento no Mercado Pago
     const mpResp = await fetch(`https://api.mercadopago.com/v1/payments/${data.id}`, {
-      headers: {
-        Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
-      },
+      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
     });
 
     const mpData = await mpResp.json();
@@ -95,18 +103,20 @@ app.post("/webhook", async (req, res) => {
       return res.json({ ok: true });
     }
 
-    // Pega os dados originais do front
     const externalRef = JSON.parse(mpData.external_reference || "{}");
-    const { nome, whatsapp, diaagendado, horaagendada, servico, precoTotal } = externalRef;
+    const { nome, whatsapp, diaagendado, horaagendada, servico } = externalRef;
+    let { precoTotal } = externalRef;
 
-    // --- Corrige a data antes de enviar ---
+    // Corrige preço se vier com símbolo
+    precoTotal = parseFloat(String(precoTotal).replace(/[^\d.,]/g, "").replace(",", "."));
+
+    // --- Corrige data para formato BR ---
     function formatarDataBR(dataISO) {
       if (!dataISO) return "";
       const partes = dataISO.split("-");
       if (partes.length !== 3) return dataISO;
       return `${partes[2]}/${partes[1]}/${partes[0]}`;
     }
-
     const diaagendadoFormatado = formatarDataBR(diaagendado);
 
     // Envia pro Google Script
