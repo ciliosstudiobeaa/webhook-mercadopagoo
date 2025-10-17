@@ -27,7 +27,7 @@ app.get("/horarios-bloqueados", async (req, res) => {
 app.post("/gerar-pagamento", async (req, res) => {
   const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
-  if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
+  if (!nome || !whatsapp || !servico || !Valor 30% || !diaagendado || !horaagendada) {
     return res.status(400).json({ error: "Campos obrigatórios faltando" });
   }
 
@@ -57,7 +57,7 @@ app.post("/gerar-pagamento", async (req, res) => {
           pending: "",
           failure: "",
         },
-        auto_return: "approved",
+        auto_return: "Aprroved",
         external_reference: JSON.stringify({
           nome,
           whatsapp,
