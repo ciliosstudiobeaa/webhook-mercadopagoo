@@ -15,6 +15,7 @@ app.get("/horarios-bloqueados", async (req, res) => {
   try {
     const response = await fetch(GOOGLE_SCRIPT_URL);
     const data = await response.json(); // retorna [{diaagendado, horaagendada, status}]
+    // retorna apenas os horários aprovados
     const approved = data.filter(x => x.status === "Aprovado");
     res.json(approved);
   } catch (e) {
@@ -32,7 +33,7 @@ app.post("/gerar-pagamento", async (req, res) => {
   }
 
   try {
-    // === Corrigido: back_urls válidas para evitar erro auto_return ===
+    // Gerar pagamento no Mercado Pago
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
@@ -41,24 +42,25 @@ app.post("/gerar-pagamento", async (req, res) => {
       },
       body: JSON.stringify({
         items: [
-          { title: servico, quantity: 1, unit_price: parseFloat(precoTotal) },
+          {
+            title: servico,
+            quantity: 1,
+            unit_price: parseFloat(precoTotal),
+          },
         ],
         back_urls: {
-          success: "https://seusite.com/sucesso",
-          pending: "https://seusite.com/pendente",
-          failure: "https://seusite.com/falha"
+          success: "https://seusite.com/sucesso", // URL qualquer que seja válida
+          pending: "",
+          failure: "",
         },
         auto_return: "approved",
-        external_reference: JSON.stringify({ diaagendado, horaagendada, whatsapp }),
-        description: servico
+        external_reference: JSON.stringify({ nome, diaagendado, horaagendada, whatsapp }),
       }),
     });
 
     const mpJson = await mpRes.json();
 
-    if (!mpJson.init_point) {
-      return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
-    }
+    if (!mpJson.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
 
     res.json({ init_point: mpJson.init_point });
   } catch (e) {
@@ -82,14 +84,18 @@ app.post("/webhook", async (req, res) => {
       const mpData = await mpRes.json();
 
       if (mpData.status === "approved") {
-        // Atualiza a planilha apenas se aprovado
+        // Pega o nome do frontend via external_reference
         let externalRef = {};
         try { externalRef = JSON.parse(mpData.external_reference); } catch {}
+
+        // Nome garantido
+        const nome = externalRef.nome || mpData.additional_info?.payer?.first_name || "";
+
         await fetch(GOOGLE_SCRIPT_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            nome: mpData.additional_info?.payer?.first_name || "",
+            nome,
             whatsapp: externalRef.whatsapp || "",
             servico: mpData.description || "",
             precoTotal: mpData.transaction_amount || 0,
