@@ -103,7 +103,6 @@ app.post("/webhook", async (req, res) => {
       return res.json({ ok: true });
     }
 
-    // Dados vindos do MP e do front
     const externalRef = JSON.parse(mpData.external_reference || "{}");
     const { nome, whatsapp, diaagendado, horaagendada, servico } = externalRef;
     let { precoTotal } = externalRef;
@@ -121,7 +120,7 @@ app.post("/webhook", async (req, res) => {
     }
     const diaagendadoFormatado = formatarDataBR(diaagendado);
 
-    // Envia pro Google Script
+    // Envia pro Google Script (com nome da coluna exato)
     const scriptResponse = await fetch(GOOGLE_SCRIPT_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -129,7 +128,7 @@ app.post("/webhook", async (req, res) => {
         nome,
         whatsapp,
         servico,
-        precoTotal,
+        "valor 30%": precoTotal,
         diaagendado: diaagendadoFormatado,
         horaagendada,
         status: "Aprovado",
