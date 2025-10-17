@@ -14,8 +14,7 @@ const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
     const response = await fetch(GOOGLE_SCRIPT_URL);
-    const data = await response.json(); // [{diaagendado, horaagendada, status, ...}]
-    // retorna apenas horários aprovados
+    const data = await response.json(); // retorna [{diaagendado, horaagendada, status}]
     const approved = data.filter(x => x.status === "Aprovado");
     res.json(approved);
   } catch (e) {
@@ -33,6 +32,10 @@ app.post("/gerar-pagamento", async (req, res) => {
   }
 
   try {
+    // === Log de debug ===
+    console.log("🔹 Dados recebidos para pagamento:", { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada });
+
+    // Gerar pagamento no Mercado Pago
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
@@ -50,14 +53,19 @@ app.post("/gerar-pagamento", async (req, res) => {
         back_urls: { success: "", pending: "", failure: "" },
         auto_return: "approved",
         external_reference: JSON.stringify({ diaagendado, horaagendada, whatsapp }),
+        description: servico, // garante que o MP tem a descrição
       }),
     });
 
     const mpJson = await mpRes.json();
 
-    if (!mpJson.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
+    // === Log de resposta do MP ===
+    console.log("🔹 Resposta do Mercado Pago:", mpJson);
 
-    // Não adiciona na planilha aqui! Apenas retorna link de pagamento
+    if (!mpJson.init_point) {
+      return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
+    }
+
     res.json({ init_point: mpJson.init_point });
   } catch (e) {
     console.error("Erro ao gerar pagamento:", e);
@@ -73,14 +81,15 @@ app.post("/webhook-mp", async (req, res) => {
     if (type === "payment") {
       const paymentId = data.id;
 
-      // Consulta status do pagamento
+      // Busca o pagamento no Mercado Pago
       const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
         headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
       });
       const mpData = await mpRes.json();
 
+      console.log("🔹 Dados do pagamento via webhook:", mpData);
+
       if (mpData.status === "approved") {
-        // Adiciona na planilha apenas quando aprovado
         let externalRef = {};
         try { externalRef = JSON.parse(mpData.external_reference); } catch {}
         await fetch(GOOGLE_SCRIPT_URL, {
