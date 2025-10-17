@@ -8,20 +8,30 @@ app.use(express.json());
 
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
-const BACKEND_URL = process.env.BACKEND_URL;
 
-// === Gerar pagamento ===
+// === ROTA PARA GERAR PAGAMENTO ===
 app.post("/gerar-pagamento", async (req, res) => {
   try {
+    console.log("📦 [REQ] Dados recebidos para gerar pagamento:", req.body);
     const data = req.body;
 
-    // Corrige a data para DD/MM/YYYY
-    const [year, month, day] = data.diaagendado.split("-");
-    data.diaagendado = `${day}/${month}/${year}`;
-    const precoTotal = Number(data.precoTotal);
-    if (isNaN(precoTotal)) throw new Error("Preço inválido");
+    // Envia direto para a planilha apenas status Aprovado
+    console.log("🚀 Enviando dados aprovados para o Google Script...");
+    const gsRes = await fetch(GOOGLE_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...data, status: "Aprovado" }),
+    });
 
-    // Cria preferência Mercado Pago
+    const gsJson = await gsRes.json().catch(() => ({}));
+    console.log("📄 [RES] Retorno do Google Script:", gsJson);
+
+    if (!gsJson.ok && !gsJson.success) {
+      throw new Error(gsJson.msg || "Erro ao enviar dados ao Google Script");
+    }
+
+    // Cria preferência real no Mercado Pago
+    console.log("💰 Criando preferência no Mercado Pago...");
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
@@ -29,80 +39,52 @@ app.post("/gerar-pagamento", async (req, res) => {
         Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
       },
       body: JSON.stringify({
-        items: [{ title: data.servico, quantity: 1, unit_price: precoTotal }],
-        metadata: data,
-        back_urls: {
-          success: "https://ciliosdabea.netlify.app/aguardando.html",
-          failure: "https://ciliosdabea.netlify.app/aguardando.html",
-          pending: "https://ciliosdabea.netlify.app/aguardando.html"
+        items: [
+          {
+            title: data.servico,
+            quantity: 1,
+            unit_price: data.precoTotal,
+          },
+        ],
+        metadata: {
+          servico: data.servico,
+          diaagendado: data.diaagendado,
+          horaagendada: data.horaagendada,
         },
-        notification_url: `${BACKEND_URL}/webhook`
-      })
+        back_urls: { success: "", failure: "", pending: "" },
+      }),
     });
 
     const prefJson = await mpRes.json();
+    console.log("📄 [MP] Preferência gerada:", prefJson);
+
     if (!prefJson.init_point) throw new Error("Erro ao gerar checkout MP");
 
-    // Retorna a URL do checkout para abrir em nova aba
-    res.json({ init_point: prefJson.init_point });
-
+    console.log("✅ Checkout gerado com sucesso:", prefJson.init_point);
+    return res.json({ init_point: prefJson.init_point });
   } catch (err) {
-    console.error("Erro em /gerar-pagamento:", err.message);
+    console.error("❌ ERRO EM /gerar-pagamento:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// === Webhook Mercado Pago ===
-app.post("/webhook", async (req, res) => {
-  try {
-    const paymentId = req.body.data?.id;
-    if (!paymentId) return res.status(200).send("Evento ignorado");
-
-    const payment = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-      headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` }
-    }).then(r => r.json());
-
-    if (payment.status === "approved") {
-      const data = {
-        nome: payment.metadata.nome,
-        whatsapp: payment.metadata.whatsapp,
-        servico: payment.metadata.servico,
-        diaagendado: payment.metadata.diaagendado,
-        horaagendada: payment.metadata.horaagendada,
-        status: "Aprovado",
-        pago: true
-      };
-
-      // Envia para Google Script
-      await fetch(GOOGLE_SCRIPT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data)
-      });
-
-      console.log("✅ Pagamento aprovado e enviado para Google Script", data);
-      res.status(200).send("OK");
-    } else {
-      res.status(200).send("Evento ignorado");
-    }
-
-  } catch (e) {
-    console.error("Erro webhook:", e);
-    res.status(500).send("Erro");
-  }
-});
-
-// === Horários bloqueados ===
+// === ROTA PARA BUSCAR HORÁRIOS BLOQUEADOS ===
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
+    console.log("🔍 Buscando horários bloqueados no Google Script...");
     const gsRes = await fetch(GOOGLE_SCRIPT_URL, { method: "GET" });
+
+    console.log("📡 [RES] Status do Google Script:", gsRes.status);
     const data = await gsRes.json().catch(() => []);
+    console.log("📅 [RES] Horários recebidos:", data);
+
     res.json(data);
   } catch (err) {
-    console.error("Erro /horarios-bloqueados:", err.message);
+    console.error("❌ ERRO EM /horarios-bloqueados:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
+// === SERVIDOR ONLINE ===
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
