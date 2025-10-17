@@ -103,14 +103,16 @@ app.post("/webhook", async (req, res) => {
       return res.json({ ok: true });
     }
 
+    // Dados vindos do MP e do front
     const externalRef = JSON.parse(mpData.external_reference || "{}");
     const { nome, whatsapp, diaagendado, horaagendada, servico } = externalRef;
     let { precoTotal } = externalRef;
 
-    // Corrige preço se vier com símbolo
     precoTotal = parseFloat(String(precoTotal).replace(/[^\d.,]/g, "").replace(",", "."));
+    const transaction_id = mpData.transaction_details?.transaction_id || mpData.id || "";
+    const reference = mpData.external_reference || "";
 
-    // --- Corrige data para formato BR ---
+    // Corrige data para formato BR
     function formatarDataBR(dataISO) {
       if (!dataISO) return "";
       const partes = dataISO.split("-");
@@ -131,6 +133,8 @@ app.post("/webhook", async (req, res) => {
         diaagendado: diaagendadoFormatado,
         horaagendada,
         status: "Aprovado",
+        transaction_id,
+        reference,
       }),
     });
 
