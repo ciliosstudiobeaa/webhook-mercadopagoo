@@ -50,7 +50,7 @@ app.post("/gerar-pagamento", async (req, res) => {
             unit_price: parseFloat(precoTotal),
           },
         ],
-        back_urls: { success: "", pending: "", failure: "" },
+        back_urls: { success: "www.ciliosdabea.com/failure", pending: "www.ciliosdabea.com/failure", failure: "www.ciliosdabea.com/failure" },
         auto_return: "approved",
         external_reference: JSON.stringify({ diaagendado, horaagendada, whatsapp }),
         description: servico, // garante que o MP tem a descrição
