@@ -71,21 +71,51 @@ app.get("/horarios-bloqueados", async (req, res) => {
 app.post("/webhook-mercadopago", async (req, res) => {
   try {
     const mpData = req.body;
-    console.log("📬 Webhook recebido:", mpData);
+    console.log("📬 Webhook recebido:", JSON.stringify(mpData, null, 2));
 
-    // 🔹 Só processa pagamentos aprovados
-    if(mpData.type === "payment" && mpData.data?.status === "approved") {
-      const { servico, diaagendado, horaagendada, nome, whatsapp } = mpData.data.metadata;
+    // --- Extrair status e metadata de forma segura ---
+    let status, metadata;
+    if (mpData.type === "payment") {
+      if(mpData.data?.status) {
+        status = mpData.data.status;
+        metadata = mpData.data.metadata || {};
+      } else if(mpData.data?.id) {
+        // Buscar detalhes via API se veio só ID
+        const paymentId = mpData.data.id;
+        const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+          headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` }
+        });
+        const paymentJson = await mpRes.json();
+        status = paymentJson.status;
+        metadata = paymentJson.metadata || {};
+      }
+    } else {
+      console.log("⚠️ Webhook ignorado: type não é payment");
+      return res.status(200).send("Webhook ignorado");
+    }
 
+    // --- Se aprovado, envia para Google Script ---
+    if (status === "approved") {
+      const { servico, diaagendado, horaagendada, nome, whatsapp } = metadata;
       console.log("✅ Pagamento aprovado. Enviando para Google Script...");
+
       const gsRes = await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ servico, diaagendado, horaagendada, nome, whatsapp, status: "Aprovado" }),
+        body: JSON.stringify({
+          servico,
+          diaagendado,
+          horaagendada,
+          nome,
+          whatsapp,
+          status: "Aprovado"
+        }),
       });
 
       const gsJson = await gsRes.json().catch(() => ({}));
       console.log("📄 Retorno do Google Script:", gsJson);
+    } else {
+      console.log("⚠️ Pagamento ainda não aprovado:", status);
     }
 
     res.status(200).send("OK");
