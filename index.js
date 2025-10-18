@@ -44,29 +44,12 @@ app.get("/horarios-bloqueados", async (req, res) => {
 app.post("/gerar-pagamento", async (req, res) => {
   const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
-  console.log("Recebido do frontend:", { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada });
-
   if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
-    console.log("Erro: campos obrigatórios faltando");
     return res.status(400).json({ error: "Campos obrigatórios faltando" });
   }
 
   try {
     const precoLimpo = limparValor(precoTotal);
-    console.log("Preço limpo:", precoLimpo);
-
-    const payload = {
-      items: [{ title: servico, quantity: 1, unit_price: precoLimpo }],
-      back_urls: {
-        success: "https://seusite.com/sucesso",
-        pending: "",
-        failure: "",
-      },
-      auto_return: "approved",
-      external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
-    };
-
-    console.log("Payload enviado ao Mercado Pago:", payload);
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
@@ -74,18 +57,29 @@ app.post("/gerar-pagamento", async (req, res) => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        items: [
+          {
+            title: servico,
+            quantity: 1,
+            unit_price: precoLimpo,
+          },
+        ],
+        back_urls: {
+          success: "https://seusite.com/sucesso",
+          pending: "",
+          failure: "",
+        },
+        auto_return: "approved",
+        external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
+        notification_url: `${process.env.BACKEND_URL}/webhook`
+      }),
     });
 
     const mpJson = await mpRes.json();
-    console.log("Resposta MP:", mpJson);
+    if (!mpJson.id) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
 
-    if (!mpJson.init_point) {
-      console.log("Erro: init_point não retornou");
-      return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
-    }
-
-    res.json({ init_point: mpJson.init_point });
+    res.json({ preference_id: mpJson.id, init_point: mpJson.init_point });
   } catch (e) {
     console.error("Erro ao gerar pagamento:", e);
     res.status(500).json({ error: "Erro interno" });
@@ -99,18 +93,55 @@ app.post("/webhook", async (req, res) => {
 
     if (type === "payment") {
       const paymentId = data.id;
-      console.log("Webhook recebido paymentId:", paymentId);
 
       const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
         headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
       });
       const mpData = await mpRes.json();
-      console.log("Dados do pagamento MP:", mpData);
 
       if (mpData.status === "approved") {
         let externalRef = {};
         try { externalRef = JSON.parse(mpData.external_reference); } catch {}
 
+        const nome = externalRef.nome || "";
+        const whatsapp = externalRef.whatsapp || "";
+        const servico = externalRef.servico || mpData.description || "";
+        const diaagendado = formatarDataBR(externalRef.diaagendado || "");
+        const horaagendada = externalRef.horaagendada || "";
+        const status = "Aprovado";
+
+        const valor30 = limparValor(mpData.transaction_amount || externalRef.precoTotal);
+        const transaction_id = mpData.transaction_details?.transaction_id || "";
+        const reference = paymentId || "";
+
+        await fetch(GOOGLE_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nome,
+            whatsapp,
+            servico,
+            diaagendado,
+            horaagendada,
+            status,
+            valor30,
+            transaction_id,
+            reference,
+          }),
+        });
+      }
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Erro webhook MP:", err);
+    res.sendStatus(500);
+  }
+});
+
+// === START SERVER ===
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
         const nome = externalRef.nome || "";
         const whatsapp = externalRef.whatsapp || "";
         const servico = externalRef.servico || mpData.description || "";
