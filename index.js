@@ -128,7 +128,7 @@ app.post("/webhook", async (req, res) => {
             diaagendado,
             horaagendada,
             status,
-            "Valor 30%": valor30,
+            valor30,
             transaction_id,
             reference,
           }),
