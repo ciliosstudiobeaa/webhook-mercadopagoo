@@ -142,35 +142,3 @@ app.post("/webhook", async (req, res) => {
 // === START SERVER ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
-        const nome = externalRef.nome || "";
-        const whatsapp = externalRef.whatsapp || "";
-        const servico = externalRef.servico || mpData.description || "";
-        const diaagendado = formatarDataBR(externalRef.diaagendado || "");
-        const horaagendada = externalRef.horaagendada || "";
-        const status = "Aprovado";
-        const valor30 = limparValor(mpData.transaction_amount || externalRef.precoTotal);
-        const transaction_id = mpData.transaction_details?.transaction_id || "";
-        const reference = paymentId || "";
-
-        console.log("Enviando dados para Google Script:", {
-          nome, whatsapp, servico, diaagendado, horaagendada, status, valor30, transaction_id, reference
-        });
-
-        await fetch(GOOGLE_SCRIPT_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ nome, whatsapp, servico, diaagendado, horaagendada, status, valor30, transaction_id, reference }),
-        });
-      }
-    }
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.error("Erro webhook MP:", err);
-    res.sendStatus(500);
-  }
-});
-
-// === START SERVER ===
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
