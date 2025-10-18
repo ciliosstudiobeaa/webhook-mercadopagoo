@@ -10,7 +10,7 @@ app.use(express.json());
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
-// === FUNÇÃO PARA LIMPAR E CONVERTER VALOR EM NÚMERO ===
+// === FUNÇÃO PARA LIMPAR VALOR ===
 function limparValor(valor) {
   if (!valor) return 0;
   let num = String(valor).replace(/[^\d.,]/g, "");
@@ -58,28 +58,29 @@ app.post("/gerar-pagamento", async (req, res) => {
         Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
       },
       body: JSON.stringify({
-        items: [
-          {
-            title: servico,
-            quantity: 1,
-            unit_price: precoLimpo,
-          },
-        ],
+        items: [{ title: servico, quantity: 1, unit_price: precoLimpo }],
+        payment_methods: { excluded_payment_types: [] }, // permite todos os métodos
         back_urls: {
           success: "https://seusite.com/sucesso",
-          pending: "",
-          failure: "",
+          failure: "https://seusite.com/falha",
+          pending: "https://seusite.com/pendente"
         },
         auto_return: "approved",
         external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
-        notification_url: `${process.env.BACKEND_URL}/webhook`
+        statement_descriptor: "Ciliosdabea"
       }),
     });
 
     const mpJson = await mpRes.json();
-    if (!mpJson.id) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
 
-    res.json({ preference_id: mpJson.id, init_point: mpJson.init_point });
+    // Tentar pegar QR Code Pix
+    let pixQRCode = null;
+    if (mpJson.additional_info?.transaction_data?.qr_code) {
+      pixQRCode = mpJson.additional_info.transaction_data.qr_code;
+    }
+
+    res.json({ preference_id: mpJson.id, pix_qr_code: pixQRCode });
+
   } catch (e) {
     console.error("Erro ao gerar pagamento:", e);
     res.status(500).json({ error: "Erro interno" });
@@ -110,7 +111,10 @@ app.post("/webhook", async (req, res) => {
         const horaagendada = externalRef.horaagendada || "";
         const status = "Aprovado";
 
+        // valor limpo
         const valor30 = limparValor(mpData.transaction_amount || externalRef.precoTotal);
+
+        // transaction_id e reference
         const transaction_id = mpData.transaction_details?.transaction_id || "";
         const reference = paymentId || "";
 
