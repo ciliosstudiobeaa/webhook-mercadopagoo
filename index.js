@@ -13,9 +13,7 @@ const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 // === FUNÇÃO PARA LIMPAR E CONVERTER VALOR EM NÚMERO ===
 function limparValor(valor) {
   if (!valor) return 0;
-  // Remove tudo que não seja número ou vírgula/ponto
   let num = String(valor).replace(/[^\d.,]/g, "");
-  // Substitui vírgula por ponto
   num = num.replace(",", ".");
   const parsed = parseFloat(num);
   return isNaN(parsed) ? 0 : parsed;
@@ -42,9 +40,9 @@ app.get("/horarios-bloqueados", async (req, res) => {
   }
 });
 
-// === ROTA PARA GERAR PAGAMENTO ===
+// === ROTA PARA GERAR PAGAMENTO (Pix ou Cartão) ===
 app.post("/gerar-pagamento", async (req, res) => {
-  const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
+  const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada, metodo } = req.body;
 
   if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
     return res.status(400).json({ error: "Campos obrigatórios faltando" });
@@ -52,35 +50,65 @@ app.post("/gerar-pagamento", async (req, res) => {
 
   try {
     const precoLimpo = limparValor(precoTotal);
+    let pagamento;
 
-    const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
-      },
-      body: JSON.stringify({
-        items: [
-          {
-            title: servico,
-            quantity: 1,
-            unit_price: precoLimpo,
-          },
-        ],
-        back_urls: {
-          success: "https://seusite.com/sucesso",
-          pending: "",
-          failure: "",
+    if (metodo === "pix") {
+      // Criar pagamento Pix direto
+      const mpRes = await fetch("https://api.mercadopago.com/v1/payments", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
         },
-        auto_return: "approved",
-        external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
-      }),
-    });
+        body: JSON.stringify({
+          transaction_amount: precoLimpo,
+          description: servico,
+          payment_method_id: "pix",
+          payer: { email: "cliente@pix.com", first_name: nome },
+          external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
+        }),
+      });
+      pagamento = await mpRes.json();
 
-    const mpJson = await mpRes.json();
-    if (!mpJson.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
+      if (!pagamento.point_of_interaction?.transaction_data?.qr_code_base64) {
+        return res.status(500).json({ error: "Erro ao gerar QR Code Pix", pagamento });
+      }
 
-    res.json({ init_point: mpJson.init_point });
+      res.json({
+        metodo: "pix",
+        qr_code: pagamento.point_of_interaction.transaction_data.qr_code,
+        qr_code_base64: pagamento.point_of_interaction.transaction_data.qr_code_base64,
+        id: pagamento.id
+      });
+
+    } else {
+      // Criar preferência cartão (checkout transparente)
+      const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
+        },
+        body: JSON.stringify({
+          items: [
+            { title: servico, quantity: 1, unit_price: precoLimpo }
+          ],
+          back_urls: { success:"https://seusite.com/sucesso", pending:"", failure:"" },
+          auto_return: "approved",
+          external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada })
+        }),
+      });
+      pagamento = await mpRes.json();
+
+      if (!pagamento.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento cartão", pagamento });
+
+      res.json({
+        metodo: "cartao",
+        init_point: pagamento.init_point,
+        id: pagamento.id
+      });
+    }
+
   } catch (e) {
     console.error("Erro ao gerar pagamento:", e);
     res.status(500).json({ error: "Erro interno" });
@@ -111,10 +139,7 @@ app.post("/webhook", async (req, res) => {
         const horaagendada = externalRef.horaagendada || "";
         const status = "Aprovado";
 
-        // valor limpo
         const valor30 = limparValor(mpData.transaction_amount || externalRef.precoTotal);
-
-        // transaction_id e reference
         const transaction_id = mpData.transaction_details?.transaction_id || "";
         const reference = paymentId || "";
 
