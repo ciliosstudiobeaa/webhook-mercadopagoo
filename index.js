@@ -13,9 +13,7 @@ const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 // === FUNÇÃO PARA LIMPAR E CONVERTER VALOR EM NÚMERO ===
 function limparValor(valor) {
   if (!valor) return 0;
-  // Remove tudo que não seja número ou vírgula/ponto
   let num = String(valor).replace(/[^\d.,]/g, "");
-  // Substitui vírgula por ponto
   num = num.replace(",", ".");
   const parsed = parseFloat(num);
   return isNaN(parsed) ? 0 : parsed;
@@ -42,7 +40,7 @@ app.get("/horarios-bloqueados", async (req, res) => {
   }
 });
 
-// === ROTA PARA GERAR PAGAMENTO ===
+// === ROTA PARA GERAR PAGAMENTO (CHECKOUT TRANSPARENTE) ===
 app.post("/gerar-pagamento", async (req, res) => {
   const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
@@ -78,9 +76,10 @@ app.post("/gerar-pagamento", async (req, res) => {
     });
 
     const mpJson = await mpRes.json();
-    if (!mpJson.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
+    if (!mpJson.id) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
 
-    res.json({ init_point: mpJson.init_point });
+    // Envia preference_id para o frontend (checkout transparente)
+    res.json({ preference_id: mpJson.id });
   } catch (e) {
     console.error("Erro ao gerar pagamento:", e);
     res.status(500).json({ error: "Erro interno" });
@@ -111,10 +110,7 @@ app.post("/webhook", async (req, res) => {
         const horaagendada = externalRef.horaagendada || "";
         const status = "Aprovado";
 
-        // valor limpo
         const valor30 = limparValor(mpData.transaction_amount || externalRef.precoTotal);
-
-        // transaction_id e reference
         const transaction_id = mpData.transaction_details?.transaction_id || "";
         const reference = paymentId || "";
 
