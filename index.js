@@ -40,16 +40,26 @@ app.get("/horarios-bloqueados", async (req, res) => {
   }
 });
 
-// === ROTA PARA GERAR PAGAMENTO ===
+// === ROTA PARA GERAR PAGAMENTO (COM LOGS DETALHADOS) ===
 app.post("/gerar-pagamento", async (req, res) => {
   const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
   if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
+    console.log("=== ERRO: Campos obrigatórios faltando ===", req.body);
     return res.status(400).json({ error: "Campos obrigatórios faltando" });
   }
 
   try {
     const precoLimpo = limparValor(precoTotal);
+
+    console.log("=== Enviando para Mercado Pago ===", {
+      servico,
+      precoLimpo,
+      nome,
+      whatsapp,
+      diaagendado,
+      horaagendada
+    });
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
@@ -76,11 +86,16 @@ app.post("/gerar-pagamento", async (req, res) => {
     });
 
     const mpJson = await mpRes.json();
-    if (!mpJson.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
+    console.log("=== Resposta Mercado Pago ===", mpJson);
+
+    if (!mpJson.init_point) {
+      console.error("=== ERRO: init_point não veio do Mercado Pago ===", mpJson);
+      return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
+    }
 
     res.json({ init_point: mpJson.init_point });
   } catch (e) {
-    console.error("Erro ao gerar pagamento:", e);
+    console.error("=== ERRO AO GERAR PAGAMENTO ===", e);
     res.status(500).json({ error: "Erro interno" });
   }
 });
@@ -153,7 +168,6 @@ app.get("/status-pagamento", async (req, res) => {
         headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
       });
     } else {
-      // Consulta via search de pagamentos por external_reference
       mpRes = await fetch(`https://api.mercadopago.com/v1/payments/search?external_reference=${encodeURIComponent(reference)}`, {
         headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
       });
@@ -161,7 +175,6 @@ app.get("/status-pagamento", async (req, res) => {
 
     const mpData = await mpRes.json();
 
-    // Pega o status
     let status = "";
     if (mpData.status) {
       status = mpData.status;
