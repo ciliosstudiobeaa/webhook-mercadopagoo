@@ -189,6 +189,11 @@ app.get("/status-pagamento", async (req, res) => {
   }
 });
 
+// === ROTA PING PARA O CRON JOB ===
+app.get("/ping", (req, res) => {
+  res.status(200).send("pong");
+});
+
 // === START SERVER ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
