@@ -13,9 +13,7 @@ const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 // === FUNÇÃO PARA LIMPAR E CONVERTER VALOR EM NÚMERO ===
 function limparValor(valor) {
   if (!valor) return 0;
-  // Remove tudo que não seja número ou vírgula/ponto
   let num = String(valor).replace(/[^\d.,]/g, "");
-  // Substitui vírgula por ponto
   num = num.replace(",", ".");
   const parsed = parseFloat(num);
   return isNaN(parsed) ? 0 : parsed;
@@ -34,6 +32,7 @@ app.get("/horarios-bloqueados", async (req, res) => {
   try {
     const response = await fetch(GOOGLE_SCRIPT_URL);
     const data = await response.json();
+    // Apenas horários aprovados
     const approved = data.filter(x => x.status === "Aprovado");
     res.json(approved);
   } catch (e) {
@@ -53,6 +52,7 @@ app.post("/gerar-pagamento", async (req, res) => {
   try {
     const precoLimpo = limparValor(precoTotal);
 
+    // Cria a preferência Mercado Pago
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
       headers: {
@@ -61,11 +61,7 @@ app.post("/gerar-pagamento", async (req, res) => {
       },
       body: JSON.stringify({
         items: [
-          {
-            title: servico,
-            quantity: 1,
-            unit_price: precoLimpo,
-          },
+          { title: servico, quantity: 1, unit_price: precoLimpo }
         ],
         back_urls: {
           success: "https://seusite.com/sucesso",
@@ -73,7 +69,7 @@ app.post("/gerar-pagamento", async (req, res) => {
           failure: "",
         },
         auto_return: "approved",
-        external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
+        external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada })
       }),
     });
 
@@ -100,6 +96,7 @@ app.post("/webhook", async (req, res) => {
       });
       const mpData = await mpRes.json();
 
+      // Só processa pagamentos aprovados
       if (mpData.status === "approved") {
         let externalRef = {};
         try { externalRef = JSON.parse(mpData.external_reference); } catch {}
@@ -111,13 +108,12 @@ app.post("/webhook", async (req, res) => {
         const horaagendada = externalRef.horaagendada || "";
         const status = "Aprovado";
 
-        // valor limpo
         const valor30 = limparValor(mpData.transaction_amount || externalRef.precoTotal);
 
-        // transaction_id e reference
         const transaction_id = mpData.transaction_details?.transaction_id || "";
         const reference = paymentId || "";
 
+        // Envia apenas quando aprovado
         await fetch(GOOGLE_SCRIPT_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -133,6 +129,8 @@ app.post("/webhook", async (req, res) => {
             reference,
           }),
         });
+
+        console.log(`Pagamento aprovado e enviado para a planilha: ${nome} - ${diaagendado} ${horaagendada}`);
       }
     }
 
