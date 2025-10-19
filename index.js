@@ -10,10 +10,12 @@ app.use(express.json());
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
-// === FUNÇÃO PARA LIMPAR E CONVERTER VALOR ===
+// === FUNÇÃO PARA LIMPAR E CONVERTER VALOR EM NÚMERO ===
 function limparValor(valor) {
   if (!valor) return 0;
+  // Remove tudo que não seja número ou vírgula/ponto
   let num = String(valor).replace(/[^\d.,]/g, "");
+  // Substitui vírgula por ponto
   num = num.replace(",", ".");
   const parsed = parseFloat(num);
   return isNaN(parsed) ? 0 : parsed;
@@ -40,60 +42,61 @@ app.get("/horarios-bloqueados", async (req, res) => {
   }
 });
 
-// === ROTA PARA GERAR PAGAMENTO (Pix ou Cartão) ===
+// === ROTA PARA GERAR PAGAMENTO ===
 app.post("/gerar-pagamento", async (req, res) => {
-  const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada, metodo } = req.body;
+  const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
-  if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada || !metodo) {
+  if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
     return res.status(400).json({ error: "Campos obrigatórios faltando" });
   }
 
   try {
     const precoLimpo = limparValor(precoTotal);
 
-    let preference = {
-      items: [{ title: servico, quantity: 1, unit_price: precoLimpo }],
-      external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
-      back_urls: { success: "https://seusite.com/sucesso", pending: "", failure: "" },
-      auto_return: "approved"
-    };
-
-    // Se for Pix, habilita QR
-    if (metodo === "pix") {
-      preference.payment_methods = { excluded_payment_types:[{id:"credit_card"}] };
-    }
-
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
-      headers: { "Content-Type":"application/json", Authorization:`Bearer ${MP_ACCESS_TOKEN}` },
-      body: JSON.stringify(preference)
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
+      },
+      body: JSON.stringify({
+        items: [
+          {
+            title: servico,
+            quantity: 1,
+            unit_price: precoLimpo,
+          },
+        ],
+        back_urls: {
+          success: "https://seusite.com/sucesso",
+          pending: "",
+          failure: "",
+        },
+        auto_return: "approved",
+        external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
+      }),
     });
 
     const mpJson = await mpRes.json();
-    if (!mpJson.init_point && !mpJson.sandbox_init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
+    if (!mpJson.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
 
-    // Retorna info do pagamento para o frontend decidir mostrar QR ou iframe
-    res.json({
-      init_point: mpJson.init_point,
-      sandbox_init_point: mpJson.sandbox_init_point,
-      id: mpJson.id
-    });
-
+    res.json({ init_point: mpJson.init_point });
   } catch (e) {
     console.error("Erro ao gerar pagamento:", e);
     res.status(500).json({ error: "Erro interno" });
   }
 });
 
-// === WEBHOOK ===
+// === ROTA DE WEBHOOK PARA PAGAMENTO APROVADO ===
 app.post("/webhook", async (req, res) => {
   try {
     const { type, data } = req.body;
 
     if (type === "payment") {
       const paymentId = data.id;
+
       const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-        headers: { Authorization:`Bearer ${MP_ACCESS_TOKEN}` }
+        headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
       });
       const mpData = await mpRes.json();
 
@@ -107,14 +110,28 @@ app.post("/webhook", async (req, res) => {
         const diaagendado = formatarDataBR(externalRef.diaagendado || "");
         const horaagendada = externalRef.horaagendada || "";
         const status = "Aprovado";
+
+        // valor limpo
         const valor30 = limparValor(mpData.transaction_amount || externalRef.precoTotal);
+
+        // transaction_id e reference
         const transaction_id = mpData.transaction_details?.transaction_id || "";
         const reference = paymentId || "";
 
         await fetch(GOOGLE_SCRIPT_URL, {
           method: "POST",
-          headers: { "Content-Type":"application/json" },
-          body: JSON.stringify({ nome, whatsapp, servico, diaagendado, horaagendada, status, valor30, transaction_id, reference })
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nome,
+            whatsapp,
+            servico,
+            diaagendado,
+            horaagendada,
+            status,
+            valor30,
+            transaction_id,
+            reference,
+          }),
         });
       }
     }
