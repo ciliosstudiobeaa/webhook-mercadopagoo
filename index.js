@@ -153,7 +153,7 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// === NOVA ROTA: CONSULTAR STATUS DO PAGAMENTO ===
+// === CONSULTAR STATUS DO PAGAMENTO ===
 app.get("/status-pagamento", async (req, res) => {
   try {
     const { transaction_id, reference } = req.query;
@@ -189,7 +189,7 @@ app.get("/status-pagamento", async (req, res) => {
   }
 });
 
-// === ROTA PING PARA O CRON JOB ===
+// === ROTA DE PING PARA MANTER ACORDADO ===
 app.get("/ping", (req, res) => {
   res.status(200).send("pong");
 });
