@@ -27,6 +27,12 @@ function formatarDataBR(dataISO) {
   return `${partes[2]}/${partes[1]}/${partes[0]}`;
 }
 
+// === ROTA DE TESTE (PING) ===
+app.get("/ping", (req, res) => {
+  console.log("Ping recebido");
+  res.status(200).send("pong");
+});
+
 // === ROTA PARA HORÁRIOS BLOQUEADOS ===
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
@@ -42,23 +48,17 @@ app.get("/horarios-bloqueados", async (req, res) => {
   }
 });
 
-// === ROTA PARA GERAR PAGAMENTO COM LOGS ===
+// === ROTA PARA GERAR PAGAMENTO ===
 app.post("/gerar-pagamento", async (req, res) => {
   const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
-  console.log("Recebido pedido de pagamento:", req.body);
-
   if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
-    console.error("Campos obrigatórios faltando");
     return res.status(400).json({ error: "Campos obrigatórios faltando" });
   }
 
   try {
     const precoLimpo = limparValor(precoTotal);
-    console.log("Preço limpo:", precoLimpo);
-
-    const externalRef = { nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada };
-    console.log("External reference enviado ao MP:", externalRef);
+    console.log("Criando preferência de pagamento para:", { nome, servico, precoLimpo });
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
@@ -67,18 +67,19 @@ app.post("/gerar-pagamento", async (req, res) => {
         Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
       },
       body: JSON.stringify({
-        items: [{ title: servico, quantity: 1, unit_price: precoLimpo }],
+        items: [
+          { title: servico, quantity: 1, unit_price: precoLimpo }
+        ],
         back_urls: { success: "https://seusite.com/sucesso", pending: "", failure: "" },
         auto_return: "approved",
-        external_reference: JSON.stringify(externalRef),
+        external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
       }),
     });
 
     const mpJson = await mpRes.json();
-    console.log("Resposta do MP:", mpJson);
+    console.log("Resposta Mercado Pago:", mpJson);
 
     if (!mpJson.init_point) {
-      console.error("Erro ao gerar init_point do MP");
       return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
     }
 
@@ -89,32 +90,27 @@ app.post("/gerar-pagamento", async (req, res) => {
   }
 });
 
-// === WEBHOOK PARA PAGAMENTO APROVADO COM LOGS ===
+// === WEBHOOK PARA PAGAMENTO APROVADO ===
 app.post("/webhook", async (req, res) => {
   try {
+    console.log("Webhook recebido:", req.body);
     const { type, data } = req.body;
-
-    console.log("=== WEBHOOK RECEBIDO ===");
-    console.log("Tipo:", type);
-    console.log("Dados brutos:", JSON.stringify(data, null, 2));
 
     if (type === "payment") {
       const paymentId = data.id;
-      console.log("Payment ID:", paymentId);
+      console.log("Consultando pagamento Mercado Pago:", paymentId);
 
       const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
         headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
       });
+
       const mpData = await mpRes.json();
-      console.log("Dados do pagamento MP:", JSON.stringify(mpData, null, 2));
+      console.log("Dados do pagamento:", mpData);
 
       if (mpData.status === "approved") {
         let externalRef = {};
-        try {
-          console.log("External reference raw:", mpData.external_reference);
-          externalRef = JSON.parse(mpData.external_reference);
-        } catch (e) {
-          console.error("Erro ao parsear external_reference:", e);
+        try { externalRef = JSON.parse(mpData.external_reference); } catch (err) {
+          console.log("Erro ao parsear external_reference:", err.message);
         }
 
         const nome = externalRef.nome || "";
@@ -127,25 +123,17 @@ app.post("/webhook", async (req, res) => {
         const transaction_id = mpData.transaction_details?.transaction_id || "";
         const reference = paymentId || "";
 
-        console.log("Campos que serão enviados para planilha:", { nome, whatsapp, servico, diaagendado, horaagendada, status, valor30, transaction_id, reference });
+        console.log("Enviando para planilha:", { nome, servico, valor30, transaction_id, reference });
 
+        // --- Envio para planilha ---
         const response = await fetch(GOOGLE_SCRIPT_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ nome, whatsapp, servico, diaagendado, horaagendada, status, valor30, transaction_id, reference }),
         });
 
-        const text = await response.text();
-        console.log("Resposta crua do Google Script:", text);
-
-        let result;
-        try {
-          result = JSON.parse(text);
-        } catch (e) {
-          console.error("Erro ao parsear resposta do Google Script:", e);
-          result = {};
-        }
-        console.log("Resultado parseado do Google Script:", result);
+        const result = await response.json().catch(() => ({}));
+        console.log("Resposta planilha:", result);
       }
     }
 
@@ -184,11 +172,6 @@ app.get("/status-pagamento", async (req, res) => {
     console.error("Erro ao consultar status do pagamento:", err);
     res.status(500).json({ error: "Erro interno" });
   }
-});
-
-// === ROTA DE PING ===
-app.get("/ping", (req, res) => {
-  res.status(200).send("pong");
 });
 
 // === START SERVER ===
