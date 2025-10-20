@@ -40,26 +40,16 @@ app.get("/horarios-bloqueados", async (req, res) => {
   }
 });
 
-// === ROTA PARA GERAR PAGAMENTO (COM LOGS DETALHADOS) ===
+// === ROTA PARA GERAR PAGAMENTO ===
 app.post("/gerar-pagamento", async (req, res) => {
   const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
   if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
-    console.log("=== ERRO: Campos obrigatórios faltando ===", req.body);
     return res.status(400).json({ error: "Campos obrigatórios faltando" });
   }
 
   try {
     const precoLimpo = limparValor(precoTotal);
-
-    console.log("=== Enviando para Mercado Pago ===", {
-      servico,
-      precoLimpo,
-      nome,
-      whatsapp,
-      diaagendado,
-      horaagendada
-    });
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
@@ -69,38 +59,26 @@ app.post("/gerar-pagamento", async (req, res) => {
       },
       body: JSON.stringify({
         items: [
-          {
-            title: servico,
-            quantity: 1,
-            unit_price: precoLimpo,
-          },
+          { title: servico, quantity: 1, unit_price: precoLimpo }
         ],
-        back_urls: {
-          success: "https://seusite.com/sucesso",
-          pending: "",
-          failure: "",
-        },
+        back_urls: { success: "https://seusite.com/sucesso", pending: "", failure: "" },
         auto_return: "approved",
         external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
       }),
     });
 
     const mpJson = await mpRes.json();
-    console.log("=== Resposta Mercado Pago ===", mpJson);
 
-    if (!mpJson.init_point) {
-      console.error("=== ERRO: init_point não veio do Mercado Pago ===", mpJson);
-      return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
-    }
+    if (!mpJson.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
 
     res.json({ init_point: mpJson.init_point });
   } catch (e) {
-    console.error("=== ERRO AO GERAR PAGAMENTO ===", e);
+    console.error("Erro ao gerar pagamento:", e);
     res.status(500).json({ error: "Erro interno" });
   }
 });
 
-// === ROTA DE WEBHOOK PARA PAGAMENTO APROVADO ===
+// === WEBHOOK PARA PAGAMENTO APROVADO ===
 app.post("/webhook", async (req, res) => {
   try {
     const { type, data } = req.body;
@@ -123,26 +101,18 @@ app.post("/webhook", async (req, res) => {
         const diaagendado = formatarDataBR(externalRef.diaagendado || "");
         const horaagendada = externalRef.horaagendada || "";
         const status = "Aprovado";
-
         const valor30 = limparValor(mpData.transaction_amount || externalRef.precoTotal);
         const transaction_id = mpData.transaction_details?.transaction_id || "";
         const reference = paymentId || "";
 
-        await fetch(GOOGLE_SCRIPT_URL, {
+        // --- Envio para planilha ---
+        const response = await fetch(GOOGLE_SCRIPT_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            nome,
-            whatsapp,
-            servico,
-            diaagendado,
-            horaagendada,
-            status,
-            valor30,
-            transaction_id,
-            reference,
-          }),
+          body: JSON.stringify({ nome, whatsapp, servico, diaagendado, horaagendada, status, valor30, transaction_id, reference }),
         });
+        const result = await response.json().catch(()=>({}));
+        console.log("Planilha OK", result);
       }
     }
 
@@ -157,10 +127,7 @@ app.post("/webhook", async (req, res) => {
 app.get("/status-pagamento", async (req, res) => {
   try {
     const { transaction_id, reference } = req.query;
-
-    if (!transaction_id && !reference) {
-      return res.status(400).json({ error: "transaction_id ou reference obrigatórios" });
-    }
+    if (!transaction_id && !reference) return res.status(400).json({ error: "transaction_id ou reference obrigatórios" });
 
     let mpRes;
     if (transaction_id) {
@@ -174,13 +141,9 @@ app.get("/status-pagamento", async (req, res) => {
     }
 
     const mpData = await mpRes.json();
-
     let status = "";
-    if (mpData.status) {
-      status = mpData.status;
-    } else if (mpData.results && mpData.results[0]) {
-      status = mpData.results[0].status;
-    }
+    if (mpData.status) status = mpData.status;
+    else if (mpData.results && mpData.results[0]) status = mpData.results[0].status;
 
     res.json({ status });
   } catch (err) {
@@ -189,7 +152,7 @@ app.get("/status-pagamento", async (req, res) => {
   }
 });
 
-// === ROTA DE PING PARA MANTER ACORDADO ===
+// === ROTA DE PING ===
 app.get("/ping", (req, res) => {
   res.status(200).send("pong");
 });
