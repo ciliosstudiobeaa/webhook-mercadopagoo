@@ -30,9 +30,11 @@ function formatarDataBR(dataISO) {
 // === ROTA PARA HORÁRIOS BLOQUEADOS ===
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
+    console.log("Buscando horários bloqueados...");
     const response = await fetch(GOOGLE_SCRIPT_URL);
     const data = await response.json();
     const approved = data.filter(x => x.status === "Aprovado");
+    console.log("Horários aprovados:", approved);
     res.json(approved);
   } catch (e) {
     console.error("Erro ao buscar horários:", e);
@@ -40,16 +42,23 @@ app.get("/horarios-bloqueados", async (req, res) => {
   }
 });
 
-// === ROTA PARA GERAR PAGAMENTO ===
+// === ROTA PARA GERAR PAGAMENTO COM LOGS ===
 app.post("/gerar-pagamento", async (req, res) => {
   const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
+  console.log("Recebido pedido de pagamento:", req.body);
+
   if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
+    console.error("Campos obrigatórios faltando");
     return res.status(400).json({ error: "Campos obrigatórios faltando" });
   }
 
   try {
     const precoLimpo = limparValor(precoTotal);
+    console.log("Preço limpo:", precoLimpo);
+
+    const externalRef = { nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada };
+    console.log("External reference enviado ao MP:", externalRef);
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
@@ -58,25 +67,20 @@ app.post("/gerar-pagamento", async (req, res) => {
         Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
       },
       body: JSON.stringify({
-        items: [
-          {
-            title: servico,
-            quantity: 1,
-            unit_price: precoLimpo,
-          },
-        ],
-        back_urls: {
-          success: "https://seusite.com/sucesso",
-          pending: "",
-          failure: "",
-        },
+        items: [{ title: servico, quantity: 1, unit_price: precoLimpo }],
+        back_urls: { success: "https://seusite.com/sucesso", pending: "", failure: "" },
         auto_return: "approved",
-        external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
+        external_reference: JSON.stringify(externalRef),
       }),
     });
 
     const mpJson = await mpRes.json();
-    if (!mpJson.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
+    console.log("Resposta do MP:", mpJson);
+
+    if (!mpJson.init_point) {
+      console.error("Erro ao gerar init_point do MP");
+      return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
+    }
 
     res.json({ init_point: mpJson.init_point });
   } catch (e) {
@@ -85,22 +89,33 @@ app.post("/gerar-pagamento", async (req, res) => {
   }
 });
 
-// === ROTA DE WEBHOOK PARA PAGAMENTO APROVADO ===
+// === WEBHOOK PARA PAGAMENTO APROVADO COM LOGS ===
 app.post("/webhook", async (req, res) => {
   try {
     const { type, data } = req.body;
 
+    console.log("=== WEBHOOK RECEBIDO ===");
+    console.log("Tipo:", type);
+    console.log("Dados brutos:", JSON.stringify(data, null, 2));
+
     if (type === "payment") {
       const paymentId = data.id;
+      console.log("Payment ID:", paymentId);
 
       const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
         headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
       });
       const mpData = await mpRes.json();
+      console.log("Dados do pagamento MP:", JSON.stringify(mpData, null, 2));
 
       if (mpData.status === "approved") {
         let externalRef = {};
-        try { externalRef = JSON.parse(mpData.external_reference); } catch {}
+        try {
+          console.log("External reference raw:", mpData.external_reference);
+          externalRef = JSON.parse(mpData.external_reference);
+        } catch (e) {
+          console.error("Erro ao parsear external_reference:", e);
+        }
 
         const nome = externalRef.nome || "";
         const whatsapp = externalRef.whatsapp || "";
@@ -108,26 +123,29 @@ app.post("/webhook", async (req, res) => {
         const diaagendado = formatarDataBR(externalRef.diaagendado || "");
         const horaagendada = externalRef.horaagendada || "";
         const status = "Aprovado";
-
         const valor30 = limparValor(mpData.transaction_amount || externalRef.precoTotal);
         const transaction_id = mpData.transaction_details?.transaction_id || "";
         const reference = paymentId || "";
 
-        await fetch(GOOGLE_SCRIPT_URL, {
+        console.log("Campos que serão enviados para planilha:", { nome, whatsapp, servico, diaagendado, horaagendada, status, valor30, transaction_id, reference });
+
+        const response = await fetch(GOOGLE_SCRIPT_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            nome,
-            whatsapp,
-            servico,
-            diaagendado,
-            horaagendada,
-            status,
-            valor30,
-            transaction_id,
-            reference,
-          }),
+          body: JSON.stringify({ nome, whatsapp, servico, diaagendado, horaagendada, status, valor30, transaction_id, reference }),
         });
+
+        const text = await response.text();
+        console.log("Resposta crua do Google Script:", text);
+
+        let result;
+        try {
+          result = JSON.parse(text);
+        } catch (e) {
+          console.error("Erro ao parsear resposta do Google Script:", e);
+          result = {};
+        }
+        console.log("Resultado parseado do Google Script:", result);
       }
     }
 
@@ -138,14 +156,11 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// === NOVA ROTA: CONSULTAR STATUS DO PAGAMENTO ===
+// === CONSULTAR STATUS DO PAGAMENTO ===
 app.get("/status-pagamento", async (req, res) => {
   try {
     const { transaction_id, reference } = req.query;
-
-    if (!transaction_id && !reference) {
-      return res.status(400).json({ error: "transaction_id ou reference obrigatórios" });
-    }
+    if (!transaction_id && !reference) return res.status(400).json({ error: "transaction_id ou reference obrigatórios" });
 
     let mpRes;
     if (transaction_id) {
@@ -153,27 +168,27 @@ app.get("/status-pagamento", async (req, res) => {
         headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
       });
     } else {
-      // Consulta via search de pagamentos por external_reference
       mpRes = await fetch(`https://api.mercadopago.com/v1/payments/search?external_reference=${encodeURIComponent(reference)}`, {
         headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
       });
     }
 
     const mpData = await mpRes.json();
-
-    // Pega o status
     let status = "";
-    if (mpData.status) {
-      status = mpData.status;
-    } else if (mpData.results && mpData.results[0]) {
-      status = mpData.results[0].status;
-    }
+    if (mpData.status) status = mpData.status;
+    else if (mpData.results && mpData.results[0]) status = mpData.results[0].status;
 
+    console.log("Status consultado:", status);
     res.json({ status });
   } catch (err) {
     console.error("Erro ao consultar status do pagamento:", err);
     res.status(500).json({ error: "Erro interno" });
   }
+});
+
+// === ROTA DE PING ===
+app.get("/ping", (req, res) => {
+  res.status(200).send("pong");
 });
 
 // === START SERVER ===
