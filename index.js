@@ -31,25 +31,20 @@ function formatarDataBR(dataISO) {
 // === ROTA PARA HORÁRIOS BLOQUEADOS ===
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
-    const { date } = req.query; // espera formato DD/MM/YYYY
+    const date = req.query.date; // Espera DD/MM/YYYY
     if (!date) return res.status(400).json({ error: "Parâmetro date é obrigatório" });
 
     console.log("Buscando horários bloqueados para:", date);
-
     const response = await fetch(GOOGLE_SCRIPT_URL);
     const data = await response.json();
 
-    // Filtra aprovados na data
-    const blocked = data
-      .filter(x => x.status.toLowerCase() === "aprovado" && x.diaagendado === date)
-      .map(x => {
-        const [h,m] = x.horaagendada.split(':'); // remove segundos se houver
-        return `${h.padStart(2,'0')}:${m.padStart(2,'0')}`;
-      });
+    // Filtra somente os aprovados e da data solicitada
+    const approved = data.filter(
+      x => x.status.toLowerCase() === "aprovado" && x.diaagendado === date
+    );
 
-    console.log("Horários bloqueados retornados:", blocked);
-    res.json(blocked);
-
+    console.log("Horários aprovados para", date, ":", approved);
+    res.json(approved);
   } catch (e) {
     console.error("Erro ao buscar horários:", e);
     res.status(500).json({ error: "Erro ao buscar horários" });
