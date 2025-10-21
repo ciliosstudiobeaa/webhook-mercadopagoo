@@ -20,12 +20,23 @@ function limparValor(valor) {
   return isNaN(parsed) ? 0 : parsed;
 }
 
-// === FUNÇÃO PARA FORMATAR DATA BR ===
-function formatarDataBR(dataISO) {
-  if (!dataISO) return "";
-  const partes = dataISO.split("-");
-  if (partes.length !== 3) return dataISO;
-  return `${partes[2]}/${partes[1]}/${partes[0]}`;
+// === FUNÇÃO PARA FORMATAR DATA BR FLEXÍVEL ===
+function formatarDataBR(data) {
+  if (!data) return "";
+  
+  // Detecta se é no formato americano MM/DD/YYYY
+  if (data.includes("/")) {
+    const [month, day, year] = data.split("/");
+    if (day && month && year) return `${day}/${month}/${year}`;
+  }
+  
+  // Assume ISO YYYY-MM-DD
+  if (data.includes("-")) {
+    const [year, month, day] = data.split("-");
+    if (day && month && year) return `${day}/${month}/${year}`;
+  }
+  
+  return data; // se não reconheceu, retorna original
 }
 
 // === ROTA PARA HORÁRIOS BLOQUEADOS ===
