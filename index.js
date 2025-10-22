@@ -66,6 +66,7 @@ app.get("/horarios-bloqueados", async (req, res) => {
 
 // --- Rota gerar pagamento ---
 app.post("/gerar-pagamento", async (req, res) => {
+  console.log("DEBUG HORA FRONT:", req.body.horaagendada);
   const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
   if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
     return res.status(400).json({ error: "Campos obrigatórios faltando" });
