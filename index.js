@@ -16,7 +16,6 @@ function limparValor(valor) {
   let num = String(valor).replace(/[^\d.,]/g, "");
   num = num.replace(",", ".");
   const parsed = parseFloat(num);
-  console.log("Valor original:", valor, "→ valor limpo:", parsed);
   return isNaN(parsed) ? 0 : parsed;
 }
 
@@ -24,37 +23,41 @@ function limparValor(valor) {
 function formatarDataBR(data) {
   if (!data) return "";
   
-  // Detecta se é no formato americano MM/DD/YYYY
   if (data.includes("/")) {
     const [month, day, year] = data.split("/");
     if (day && month && year) return `${day}/${month}/${year}`;
   }
   
-  // Assume ISO YYYY-MM-DD
   if (data.includes("-")) {
     const [year, month, day] = data.split("-");
     if (day && month && year) return `${day}/${month}/${year}`;
   }
   
-  return data; // se não reconheceu, retorna original
+  return data;
 }
 
 // === ROTA PARA HORÁRIOS BLOQUEADOS ===
 app.get("/horarios-bloqueados", async (req, res) => {
   try {
-    const date = req.query.date; // Espera DD/MM/YYYY
-    if (!date) return res.status(400).json({ error: "Parâmetro date é obrigatório" });
+    const dateQuery = req.query.date; // Espera DD/MM/YYYY
+    if (!dateQuery) return res.status(400).json({ error: "Parâmetro date é obrigatório" });
 
-    console.log("Buscando horários bloqueados para:", date);
+    console.log("Buscando horários bloqueados para:", dateQuery);
+
     const response = await fetch(GOOGLE_SCRIPT_URL);
     const data = await response.json();
 
-    // Filtra somente os aprovados e da data solicitada
-    const approved = data.filter(
-      x => x.status.toLowerCase() === "aprovado" && x.diaagendado === date
+    // Normaliza datas da planilha para DD/MM/YYYY
+    const normalized = data.map(x => ({
+      ...x,
+      diaagendado: formatarDataBR(x.diaagendado)
+    }));
+
+    const approved = normalized.filter(
+      x => x.status.toLowerCase() === "aprovado" && x.diaagendado === dateQuery
     );
 
-    console.log("Horários aprovados para", date, ":", approved);
+    console.log("Horários aprovados para", dateQuery, ":", approved);
     res.json(approved);
   } catch (e) {
     console.error("Erro ao buscar horários:", e);
@@ -66,18 +69,13 @@ app.get("/horarios-bloqueados", async (req, res) => {
 app.post("/gerar-pagamento", async (req, res) => {
   const { nome, whatsapp, servico, precoTotal, diaagendado, horaagendada } = req.body;
 
-  console.log("Recebido para gerar pagamento:", req.body);
-
   if (!nome || !whatsapp || !servico || !precoTotal || !diaagendado || !horaagendada) {
     return res.status(400).json({ error: "Campos obrigatórios faltando" });
   }
 
   try {
     const precoLimpo = limparValor(precoTotal);
-
-    if (precoLimpo <= 0) {
-      return res.status(400).json({ error: "Valor inválido para pagamento" });
-    }
+    if (precoLimpo <= 0) return res.status(400).json({ error: "Valor inválido para pagamento" });
 
     const bodyPreference = {
       items: [{ title: servico, quantity: 1, unit_price: precoLimpo }],
@@ -85,8 +83,6 @@ app.post("/gerar-pagamento", async (req, res) => {
       auto_return: "approved",
       external_reference: JSON.stringify({ nome, whatsapp, servico, precoTotal: precoLimpo, diaagendado, horaagendada }),
     };
-
-    console.log("Enviando preferência para Mercado Pago:", bodyPreference);
 
     const mpRes = await fetch("https://api.mercadopago.com/checkout/preferences", {
       method: "POST",
@@ -98,11 +94,7 @@ app.post("/gerar-pagamento", async (req, res) => {
     });
 
     const mpJson = await mpRes.json();
-    console.log("Resposta do Mercado Pago:", mpJson);
-
-    if (!mpJson.init_point) {
-      return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
-    }
+    if (!mpJson.init_point) return res.status(500).json({ error: "Erro ao gerar pagamento MP", mpJson });
 
     res.json({ init_point: mpJson.init_point });
   } catch (e) {
@@ -114,7 +106,6 @@ app.post("/gerar-pagamento", async (req, res) => {
 // === WEBHOOK PARA PAGAMENTO APROVADO ===
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("Recebido webhook MP:", req.body);
     const { type, data } = req.body;
 
     if (type === "payment") {
@@ -124,11 +115,10 @@ app.post("/webhook", async (req, res) => {
         headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
       });
       const mpData = await mpRes.json();
-      console.log("Detalhes do pagamento:", mpData);
 
       if (mpData.status === "approved") {
         let externalRef = {};
-        try { externalRef = JSON.parse(mpData.external_reference); } catch { console.log("External reference não é JSON"); }
+        try { externalRef = JSON.parse(mpData.external_reference); } catch {}
 
         const nome = externalRef.nome || "";
         const whatsapp = externalRef.whatsapp || "";
@@ -140,14 +130,11 @@ app.post("/webhook", async (req, res) => {
         const transaction_id = mpData.transaction_details?.transaction_id || "";
         const reference = paymentId || "";
 
-        // --- Envio para planilha ---
-        const response = await fetch(GOOGLE_SCRIPT_URL, {
+        await fetch(GOOGLE_SCRIPT_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ nome, whatsapp, servico, diaagendado, horaagendada, status, valor30, transaction_id, reference }),
-        });
-        const result = await response.json().catch(() => ({}));
-        console.log("Envio para planilha:", result);
+        }).catch(() => {});
       }
     }
 
@@ -176,8 +163,6 @@ app.get("/status-pagamento", async (req, res) => {
     }
 
     const mpData = await mpRes.json();
-    console.log("Status retornado pelo MP:", mpData);
-
     let status = "";
     if (mpData.status) status = mpData.status;
     else if (mpData.results && mpData.results[0]) status = mpData.results[0].status;
